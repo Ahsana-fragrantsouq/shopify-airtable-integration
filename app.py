@@ -11,12 +11,13 @@ print("🚀 Flask Shopify Airtable Service Starting...", flush=True)
 
 # ---------------- ENV ----------------
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+AIRTABLE_BASE_ID = "app2jovFGPe7hkYdB"   # fixed base id
 SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 
-ORDERS_TABLE = "Orders"
-CUSTOMERS_TABLE = "Customers"
-SKU_TABLE = "French Inventories"
+# Airtable TABLE IDs
+CUSTOMERS_TABLE = "tblas8rMuwMEAtjIv"
+ORDERS_TABLE = "tbl1bAQM8lBgsGrqh"
+SKU_TABLE = "tblI3DHGUT2GRINfw"
 
 AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -46,6 +47,7 @@ def verify_webhook(data, hmac_header):
 
     print("🔐 Webhook valid:", valid, flush=True)
     return valid
+
 
 # ---------------- AIRTABLE HELPERS ----------------
 def find_customer(phone, email):
