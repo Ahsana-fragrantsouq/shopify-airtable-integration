@@ -27,18 +27,26 @@ AIRTABLE_HEADERS = {
 def verify_webhook(data, hmac_header):
     print("🔐 Verifying Shopify webhook signature...", flush=True)
 
+    if not hmac_header:
+        print("⚠️ No HMAC header received", flush=True)
+        return False
+
     digest = hmac.new(
-        SHOPIFY_WEBHOOK_SECRET.encode(),
+        SHOPIFY_WEBHOOK_SECRET.encode("utf-8"),
         data,
         hashlib.sha256
     ).digest()
 
-    computed_hmac = base64.b64encode(digest).decode()
+    computed_hmac = base64.b64encode(digest).decode("utf-8")
+
+    print("📌 Shopify HMAC :", hmac_header, flush=True)
+    print("📌 Computed HMAC:", computed_hmac, flush=True)
 
     valid = hmac.compare_digest(computed_hmac, hmac_header)
 
     print("🔐 Webhook valid:", valid, flush=True)
     return valid
+
 
 # ---------------- AIRTABLE HELPERS ----------------
 def find_customer_by_phone(phone):
@@ -166,7 +174,7 @@ def shopify_orders():
     print("🔔 Shopify webhook received", flush=True)
 
     hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
-    data = request.get_data()
+    data = request.get_data()   # RAW BODY
 
     if not verify_webhook(data, hmac_header):
         print("⛔ Webhook verification failed", flush=True)
