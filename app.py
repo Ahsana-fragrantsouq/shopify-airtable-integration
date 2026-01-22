@@ -47,17 +47,20 @@ def verify_webhook(data, hmac_header):
     print("🔐 Webhook valid:", valid, flush=True)
     return valid
 
-
 # ---------------- AIRTABLE HELPERS ----------------
-def find_customer_by_phone(phone):
-    print("🔍 Searching customer by phone:", phone, flush=True)
+def find_customer(phone, email):
+    print("🔍 Searching customer...", flush=True)
 
-    if not phone:
-        print("⚠️ No phone provided", flush=True)
+    if phone:
+        formula = f"{{Contact Number}}='{phone}'"
+    elif email:
+        formula = f"{{Mail id}}='{email}'"
+    else:
+        print("⚠️ No phone or email to search", flush=True)
         return None
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
-    params = {"filterByFormula": f"{{Contact Number}}='{phone}'"}
+    params = {"filterByFormula": formula}
 
     r = requests.get(url, headers=AIRTABLE_HEADERS, params=params)
     data = r.json()
@@ -77,9 +80,9 @@ def create_customer(customer):
     payload = {
         "fields": {
             "Name": customer["name"],
-            "Mail id": customer["email"],
-            "Contact Number": customer["phone"],
-            "Address": customer["address"],
+            "Mail id": customer.get("email"),
+            "Contact Number": customer.get("phone"),
+            "Address": customer.get("address"),
             "Acquired sales channel": "Online Store"
         }
     }
@@ -87,7 +90,16 @@ def create_customer(customer):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
 
-    cid = r.json()["id"]
+    print("📨 Airtable status:", r.status_code, flush=True)
+    print("📨 Airtable body:", r.text, flush=True)
+
+    data = r.json()
+
+    if "id" not in data:
+        print("❌ Airtable customer creation failed", flush=True)
+        return None
+
+    cid = data["id"]
     print("✅ Customer created:", cid, flush=True)
     return cid
 
@@ -96,7 +108,6 @@ def find_sku_record(sku):
     print("🔍 Searching SKU:", sku, flush=True)
 
     if not sku:
-        print("⚠️ SKU empty", flush=True)
         return None
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{SKU_TABLE}"
@@ -110,7 +121,7 @@ def find_sku_record(sku):
         print("✅ SKU found:", sid, flush=True)
         return sid
 
-    print("❌ SKU not found in inventory", flush=True)
+    print("❌ SKU not found", flush=True)
     return None
 
 
@@ -139,29 +150,34 @@ def create_order(order, customer_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
 
-    print("✅ Order inserted into Airtable:", r.status_code, flush=True)
+    print("📨 Order insert status:", r.status_code, flush=True)
+    print("📨 Order insert body:", r.text, flush=True)
 
 
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
     print("📦 Processing Shopify order:", order.get("id"), flush=True)
 
-    customer = order["customer"]
+    customer = order.get("customer", {})
 
     phone = customer.get("phone")
     email = customer.get("email")
     name = customer.get("first_name", "") + " " + customer.get("last_name", "")
     address = order.get("shipping_address", {}).get("address1", "")
 
-    customer_id = find_customer_by_phone(phone)
+    customer_id = find_customer(phone, email)
 
     if not customer_id:
         customer_id = create_customer({
-            "name": name,
+            "name": name.strip() or "Unknown",
             "email": email,
             "phone": phone,
             "address": address
         })
+
+    if not customer_id:
+        print("⛔ Cannot create order because customer creation failed", flush=True)
+        return
 
     create_order(order, customer_id)
 
@@ -174,7 +190,7 @@ def shopify_orders():
     print("🔔 Shopify webhook received", flush=True)
 
     hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
-    data = request.get_data()   # RAW BODY
+    data = request.get_data()
 
     if not verify_webhook(data, hmac_header):
         print("⛔ Webhook verification failed", flush=True)
