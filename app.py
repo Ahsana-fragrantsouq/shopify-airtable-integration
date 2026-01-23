@@ -85,7 +85,8 @@ def create_customer(customer):
             "Mail id": customer.get("email"),
             "Contact Number": customer.get("phone"),
             "Address": customer.get("address"),
-            "Acquired sales channel": "Online Store"
+            "Acquired sales channel": "Shopify"
+
         }
     }
 
