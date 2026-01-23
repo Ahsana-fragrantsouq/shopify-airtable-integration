@@ -146,7 +146,12 @@ def create_order(order, customer_id):
         "Payment Status": order["financial_status"].capitalize(),
         "Shipping Status": order["fulfillment_status"].capitalize() if order["fulfillment_status"] else "New",
         "Sales Channel": "Online Store",
-        "Order Packing Slip": order.get("order_status_url")
+        "Order Packing Slip": [
+    {
+        "url": order.get("order_status_url")
+    }
+]
+
     }
 
     if sku_record:
