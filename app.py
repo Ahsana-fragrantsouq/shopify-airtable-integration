@@ -3,6 +3,7 @@ import hmac
 import hashlib
 import base64
 import requests
+from datetime import datetime
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -11,7 +12,7 @@ print("🚀 Flask Shopify Airtable Service Starting...", flush=True)
 
 # ---------------- ENV ----------------
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
-AIRTABLE_BASE_ID = "app2jovFGPe7hkYdB"   # fixed base id
+AIRTABLE_BASE_ID = "app2jovFGPe7hkYdB"
 SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 
 # Airtable TABLE IDs
@@ -86,7 +87,6 @@ def create_customer(customer):
             "Contact Number": customer.get("phone"),
             "Address": customer.get("address"),
             "Acquired sales channel": "Shopify"
-
         }
     }
 
@@ -134,10 +134,15 @@ def create_order(order, customer_id):
     line = order["line_items"][0]
     sku_record = find_sku_record(line.get("sku"))
 
+    # ✅ FIX: Convert Shopify datetime → Airtable-compatible format
+    order_date = datetime.fromisoformat(
+        order["created_at"].replace("Z", "+00:00")
+    ).isoformat()
+
     fields = {
         "Order ID": str(order["id"]),
         "Customer": [customer_id],
-        "Order Date": order["created_at"],
+        "Order Date": order_date,   # ✅ FIXED
         "Total Order Amount": float(order["subtotal_price"]),
         "Payment Status": order["financial_status"].capitalize(),
         "Shipping Status": order["fulfillment_status"].capitalize() if order["fulfillment_status"] else "New",
@@ -200,7 +205,6 @@ def shopify_orders():
         return "Unauthorized", 401
 
     order = request.json
-
     print("📥 Shopify Order JSON received", flush=True)
 
     process_order(order)
