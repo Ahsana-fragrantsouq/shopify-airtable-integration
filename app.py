@@ -117,19 +117,35 @@ def find_sku_record(sku):
     return None
 
 
+# ---------------- DUPLICATE CHECK ----------------
+def order_exists(order_id):
+    print("🔍 Checking if order already exists:", order_id, flush=True)
+
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    data = r.json()
+
+    if data.get("records"):
+        print("⚠️ Order already exists. Skipping insert.", flush=True)
+        return True
+
+    return False
+
+
 # ---------------- ORDER CREATION ----------------
 def create_order(order, customer_id):
     print("🧾 Creating order record...", flush=True)
 
-    # ⭐ FIX 1: Date must be YYYY-MM-DD
     order_date = order["created_at"].split("T")[0]
 
-    # ⭐ FIX 2: COLLECT ALL SKUs (THIS IS THE KEY)
+    # collect ALL SKUs
     sku_records = []
-
     for line in order.get("line_items", []):
-        sku = line.get("sku")
-        sku_id = find_sku_record(sku)
+        sku_id = find_sku_record(line.get("sku"))
         if sku_id:
             sku_records.append(sku_id)
 
@@ -144,13 +160,11 @@ def create_order(order, customer_id):
             if order["fulfillment_status"] else "New"
         ),
         "Sales Channel": "Online Store",
-        # ⭐ FIX 3: Attachment must be object
         "Order Packing Slip": [
             {"url": order.get("order_status_url")}
         ]
     }
 
-    # ⭐ FIX 4: MULTIPLE SKU LINKING
     if sku_records:
         fields["Item SKU"] = sku_records
 
@@ -184,6 +198,10 @@ def process_order(order):
 
     if not customer_id:
         print("⛔ Customer creation failed", flush=True)
+        return
+
+    # 🚫 DUPLICATE ORDER PROTECTION
+    if order_exists(str(order["id"])):
         return
 
     create_order(order, customer_id)
