@@ -134,10 +134,9 @@ def create_order(order, customer_id):
     line = order["line_items"][0]
     sku_record = find_sku_record(line.get("sku"))
 
-    # ✅ FIX: Convert Shopify datetime → Airtable-compatible format
-    order_date = datetime.fromisoformat(
-        order["created_at"].replace("Z", "+00:00")
-    ).isoformat()
+   # ✅ FINAL FIX: Date-only for Airtable Date field
+    order_date = order["created_at"].split("T")[0]
+
 
     fields = {
         "Order ID": str(order["id"]),
