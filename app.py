@@ -132,7 +132,7 @@ def create_order(order, customer_id):
 
     if sku_records:
         fields["Item SKU"] = sku_records
-        fields["Brands"] = sku_records   # ✅ FIX: linked French Inventories IDs
+        fields["Brands"] = sku_records   # ✅ Correct for linked field
 
     payload = {"fields": fields}
 
@@ -145,7 +145,7 @@ def create_order(order, customer_id):
 
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
-    customer = order.get("customer", {})
+    customer = order.get("customer") or {}   # ✅ FIXED
 
     customer_id = find_customer(
         customer.get("phone"),
