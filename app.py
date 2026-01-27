@@ -17,7 +17,7 @@ SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 # Airtable TABLE IDs
 CUSTOMERS_TABLE = "tblas8rMuwMEAtjIv"
 ORDERS_TABLE = "tbl1bAQM8lBgsGrqh"
-SKU_TABLE = "tblI3DHGUT2GRINfw"
+SKU_TABLE = "tblI3DHGUT2GRINfw"   # French Inventories
 
 AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -26,10 +26,7 @@ AIRTABLE_HEADERS = {
 
 # ---------------- SECURITY ----------------
 def verify_webhook(data, hmac_header):
-    print("🔐 Verifying Shopify webhook signature...", flush=True)
-
     if not hmac_header:
-        print("⚠️ No HMAC header received", flush=True)
         return False
 
     digest = hmac.new(
@@ -39,20 +36,11 @@ def verify_webhook(data, hmac_header):
     ).digest()
 
     computed_hmac = base64.b64encode(digest).decode("utf-8")
-
-    print("📌 Shopify HMAC :", hmac_header, flush=True)
-    print("📌 Computed HMAC:", computed_hmac, flush=True)
-
-    valid = hmac.compare_digest(computed_hmac, hmac_header)
-    print("🔐 Webhook valid:", valid, flush=True)
-
-    return valid
+    return hmac.compare_digest(computed_hmac, hmac_header)
 
 
 # ---------------- AIRTABLE HELPERS ----------------
 def find_customer(phone, email):
-    print("🔍 Searching customer...", flush=True)
-
     if phone:
         formula = f"{{Contact Number}}='{phone}'"
     elif email:
@@ -65,17 +53,12 @@ def find_customer(phone, email):
     data = r.json()
 
     if data.get("records"):
-        cid = data["records"][0]["id"]
-        print("✅ Customer found:", cid, flush=True)
-        return cid
+        return data["records"][0]["id"]
 
-    print("❌ Customer not found", flush=True)
     return None
 
 
 def create_customer(customer):
-    print("➕ Creating new customer:", customer["name"], flush=True)
-
     payload = {
         "fields": {
             "Name": customer["name"],
@@ -88,12 +71,7 @@ def create_customer(customer):
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
-
-    print("📨 Airtable status:", r.status_code, flush=True)
-    print("📨 Airtable body:", r.text, flush=True)
-
-    data = r.json()
-    return data.get("id")
+    return r.json().get("id")
 
 
 def find_sku_record(sku):
@@ -109,31 +87,39 @@ def find_sku_record(sku):
     data = r.json()
 
     if data.get("records"):
-        sid = data["records"][0]["id"]
-        print("✅ SKU found:", sid, flush=True)
-        return sid
+        return data["records"][0]["id"]
 
-    print("❌ SKU not found:", sku, flush=True)
+    return None
+
+
+# 🆕 BRAND FETCH (ADDED)
+def get_brand_from_sku(sku):
+    if not sku:
+        return None
+
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{SKU_TABLE}"
+    r = requests.get(
+        url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{SKU}}='{sku}'"}
+    )
+    data = r.json()
+
+    if data.get("records"):
+        return data["records"][0]["fields"].get("brand")
+
     return None
 
 
 # ---------------- DUPLICATE CHECK ----------------
 def order_exists(order_id):
-    print("🔍 Checking if order already exists:", order_id, flush=True)
-
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
         url,
         headers=AIRTABLE_HEADERS,
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
-    data = r.json()
-
-    if data.get("records"):
-        print("⚠️ Order already exists. Skipping insert.", flush=True)
-        return True
-
-    return False
+    return bool(r.json().get("records"))
 
 
 # ---------------- ORDER CREATION ----------------
@@ -142,12 +128,19 @@ def create_order(order, customer_id):
 
     order_date = order["created_at"].split("T")[0]
 
-    # collect ALL SKUs
     sku_records = []
+    brands = set()   # 🆕 collect brands
+
     for line in order.get("line_items", []):
-        sku_id = find_sku_record(line.get("sku"))
+        sku = line.get("sku")
+
+        sku_id = find_sku_record(sku)
         if sku_id:
             sku_records.append(sku_id)
+
+        brand = get_brand_from_sku(sku)
+        if brand:
+            brands.add(brand)
 
     fields = {
         "Order ID": str(order["id"]),
@@ -160,13 +153,14 @@ def create_order(order, customer_id):
             if order["fulfillment_status"] else "New"
         ),
         "Sales Channel": "Online Store",
-        "Order Packing Slip": [
-            {"url": order.get("order_status_url")}
-        ]
+        "Order Packing Slip": [{"url": order.get("order_status_url")}]
     }
 
     if sku_records:
         fields["Item SKU"] = sku_records
+
+    if brands:
+        fields["Brands"] = list(brands)   # 🆕 ADD BRAND
 
     payload = {"fields": fields}
 
@@ -179,8 +173,6 @@ def create_order(order, customer_id):
 
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
-    print("📦 Processing Shopify order:", order.get("id"), flush=True)
-
     customer = order.get("customer", {})
 
     customer_id = find_customer(
@@ -197,22 +189,17 @@ def process_order(order):
         })
 
     if not customer_id:
-        print("⛔ Customer creation failed", flush=True)
         return
 
-    # 🚫 DUPLICATE ORDER PROTECTION
     if order_exists(str(order["id"])):
         return
 
     create_order(order, customer_id)
-    print("🎯 Order processing completed", flush=True)
 
 
 # ---------------- WEBHOOK ----------------
 @app.route("/shopify/webhook/orders", methods=["POST"])
 def shopify_orders():
-    print("🔔 Shopify webhook received", flush=True)
-
     data = request.get_data()
     hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
 
