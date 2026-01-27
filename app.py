@@ -92,25 +92,6 @@ def find_sku_record(sku):
     return None
 
 
-# 🆕 BRAND FETCH (ADDED)
-def get_brand_from_sku(sku):
-    if not sku:
-        return None
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{SKU_TABLE}"
-    r = requests.get(
-        url,
-        headers=AIRTABLE_HEADERS,
-        params={"filterByFormula": f"{{SKU}}='{sku}'"}
-    )
-    data = r.json()
-
-    if data.get("records"):
-        return data["records"][0]["fields"].get("brand")
-
-    return None
-
-
 # ---------------- DUPLICATE CHECK ----------------
 def order_exists(order_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
@@ -129,18 +110,11 @@ def create_order(order, customer_id):
     order_date = order["created_at"].split("T")[0]
 
     sku_records = []
-    brands = set()   # 🆕 collect brands
 
     for line in order.get("line_items", []):
-        sku = line.get("sku")
-
-        sku_id = find_sku_record(sku)
+        sku_id = find_sku_record(line.get("sku"))
         if sku_id:
             sku_records.append(sku_id)
-
-        brand = get_brand_from_sku(sku)
-        if brand:
-            brands.add(brand)
 
     fields = {
         "Order ID": str(order["id"]),
@@ -158,9 +132,7 @@ def create_order(order, customer_id):
 
     if sku_records:
         fields["Item SKU"] = sku_records
-
-    if brands:
-        fields["Brands"] = list(brands)   # 🆕 ADD BRAND
+        fields["Brands"] = sku_records   # ✅ FIX: linked French Inventories IDs
 
     payload = {"fields": fields}
 
