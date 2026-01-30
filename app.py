@@ -110,7 +110,6 @@ def create_order(order, customer_id):
     order_date = order["created_at"].split("T")[0]
 
     sku_records = []
-
     for line in order.get("line_items", []):
         sku_id = find_sku_record(line.get("sku"))
         if sku_id:
@@ -118,6 +117,7 @@ def create_order(order, customer_id):
 
     fields = {
         "Order ID": str(order["id"]),
+        "Order Number": order.get("name", "").replace("#", ""),  # ✅ ADDED
         "Customer": [customer_id],
         "Order Date": order_date,
         "Total Order Amount": float(order["subtotal_price"]),
@@ -132,7 +132,7 @@ def create_order(order, customer_id):
 
     if sku_records:
         fields["Item SKU"] = sku_records
-        fields["Brands"] = sku_records   # ✅ Correct for linked field
+        fields["Brands"] = sku_records   # linked field stays untouched
 
     payload = {"fields": fields}
 
@@ -145,7 +145,7 @@ def create_order(order, customer_id):
 
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
-    customer = order.get("customer") or {}   # ✅ FIXED
+    customer = order.get("customer") or {}
 
     customer_id = find_customer(
         customer.get("phone"),
