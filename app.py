@@ -126,7 +126,7 @@ def update_shipping_status(order_id, status):
     }
 
     requests.patch(update_url, headers=AIRTABLE_HEADERS, json=payload)
-    print(f"🚚 Shipping status updated to {status}", flush=True)
+    print(f"🚚 Shipping Status updated to {status}", flush=True)
 
 
 # ---------------- ORDER CREATION ----------------
@@ -169,11 +169,16 @@ def create_order(order, customer_id):
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
     order_id = str(order["id"])
-    fulfillment_status = order.get("fulfillment_status")
 
-    # 🔁 Order already exists → update shipping if fulfilled
+    # ✅ ROBUST FULFILLMENT CHECK
+    is_fulfilled = (
+        order.get("fulfillment_status") == "fulfilled"
+        or len(order.get("fulfillments", [])) > 0
+    )
+
+    # 🔁 If order already exists → only update shipping
     if order_exists(order_id):
-        if fulfillment_status == "fulfilled":
+        if is_fulfilled:
             update_shipping_status(order_id, "Shipped")
         return
 
