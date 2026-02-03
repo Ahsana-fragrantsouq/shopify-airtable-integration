@@ -103,6 +103,32 @@ def order_exists(order_id):
     return bool(r.json().get("records"))
 
 
+# ---------------- SHIPPING STATUS UPDATE ----------------
+def update_shipping_status(order_id, status):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+
+    records = r.json().get("records", [])
+    if not records:
+        return
+
+    record_id = records[0]["id"]
+
+    update_url = f"{url}/{record_id}"
+    payload = {
+        "fields": {
+            "Shipping Status": status
+        }
+    }
+
+    requests.patch(update_url, headers=AIRTABLE_HEADERS, json=payload)
+    print(f"🚚 Shipping status updated to {status}", flush=True)
+
+
 # ---------------- ORDER CREATION ----------------
 def create_order(order, customer_id):
     print("🧾 Creating order record...", flush=True)
@@ -115,15 +141,6 @@ def create_order(order, customer_id):
         if sku_id:
             sku_records.append(sku_id)
 
-    # ✅ SHIPPING STATUS FIX (ONLY CHANGE)
-    fulfillment_status = order.get("fulfillment_status")
-    if fulfillment_status == "fulfilled":
-        shipping_status = "Shipped"
-    elif not fulfillment_status:
-        shipping_status = "New"
-    else:
-        shipping_status = fulfillment_status.capitalize()
-
     fields = {
         "Order ID": str(order["id"]),
         "Order Number": order.get("name", "").replace("#", ""),
@@ -131,7 +148,7 @@ def create_order(order, customer_id):
         "Order Date": order_date,
         "Total Order Amount": float(order["subtotal_price"]),
         "Payment Status": order["financial_status"].capitalize(),
-        "Shipping Status": shipping_status,   # ✅ UPDATED
+        "Shipping Status": "New",
         "Sales Channel": "Online Store",
         "Order Packing Slip": [{"url": order.get("order_status_url")}]
     }
@@ -151,6 +168,15 @@ def create_order(order, customer_id):
 
 # ---------------- MAIN LOGIC ----------------
 def process_order(order):
+    order_id = str(order["id"])
+    fulfillment_status = order.get("fulfillment_status")
+
+    # 🔁 Order already exists → update shipping if fulfilled
+    if order_exists(order_id):
+        if fulfillment_status == "fulfilled":
+            update_shipping_status(order_id, "Shipped")
+        return
+
     customer = order.get("customer") or {}
 
     customer_id = find_customer(
@@ -167,9 +193,6 @@ def process_order(order):
         })
 
     if not customer_id:
-        return
-
-    if order_exists(str(order["id"])):
         return
 
     create_order(order, customer_id)
