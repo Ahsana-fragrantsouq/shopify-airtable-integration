@@ -115,24 +115,30 @@ def create_order(order, customer_id):
         if sku_id:
             sku_records.append(sku_id)
 
+    # ✅ SHIPPING STATUS FIX (ONLY CHANGE)
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status == "fulfilled":
+        shipping_status = "Shipped"
+    elif not fulfillment_status:
+        shipping_status = "New"
+    else:
+        shipping_status = fulfillment_status.capitalize()
+
     fields = {
         "Order ID": str(order["id"]),
-        "Order Number": order.get("name", "").replace("#", ""),  # ✅ ADDED
+        "Order Number": order.get("name", "").replace("#", ""),
         "Customer": [customer_id],
         "Order Date": order_date,
         "Total Order Amount": float(order["subtotal_price"]),
         "Payment Status": order["financial_status"].capitalize(),
-        "Shipping Status": (
-            order["fulfillment_status"].capitalize()
-            if order["fulfillment_status"] else "New"
-        ),
+        "Shipping Status": shipping_status,   # ✅ UPDATED
         "Sales Channel": "Online Store",
         "Order Packing Slip": [{"url": order.get("order_status_url")}]
     }
 
     if sku_records:
         fields["Item SKU"] = sku_records
-        fields["Brands"] = sku_records   # linked field stays untouched
+        fields["Brands"] = sku_records
 
     payload = {"fields": fields}
 
