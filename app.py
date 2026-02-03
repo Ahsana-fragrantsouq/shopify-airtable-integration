@@ -106,6 +106,7 @@ def order_exists(order_id):
 # ---------------- SHIPPING STATUS UPDATE ----------------
 def update_shipping_status(order_id, status):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+
     r = requests.get(
         url,
         headers=AIRTABLE_HEADERS,
@@ -126,7 +127,7 @@ def update_shipping_status(order_id, status):
     }
 
     requests.patch(update_url, headers=AIRTABLE_HEADERS, json=payload)
-    print(f"🚚 Shipping Status updated to {status}", flush=True)
+    print(f"🚚 Shipping Status updated → {status}", flush=True)
 
 
 # ---------------- ORDER CREATION ----------------
@@ -166,20 +167,12 @@ def create_order(order, customer_id):
     print("📨 Order insert body:", r.text, flush=True)
 
 
-# ---------------- MAIN LOGIC ----------------
+# ---------------- MAIN LOGIC (ORDERS) ----------------
 def process_order(order):
     order_id = str(order["id"])
 
-    # ✅ ROBUST FULFILLMENT CHECK
-    is_fulfilled = (
-        order.get("fulfillment_status") == "fulfilled"
-        or len(order.get("fulfillments", [])) > 0
-    )
-
-    # 🔁 If order already exists → only update shipping
+    # If already exists → do nothing here
     if order_exists(order_id):
-        if is_fulfilled:
-            update_shipping_status(order_id, "Shipped")
         return
 
     customer = order.get("customer") or {}
@@ -203,7 +196,7 @@ def process_order(order):
     create_order(order, customer_id)
 
 
-# ---------------- WEBHOOK ----------------
+# ---------------- WEBHOOK : ORDERS ----------------
 @app.route("/shopify/webhook/orders", methods=["POST"])
 def shopify_orders():
     data = request.get_data()
@@ -214,3 +207,22 @@ def shopify_orders():
 
     process_order(request.json)
     return jsonify({"status": "ok"})
+
+
+# ---------------- WEBHOOK : FULFILLMENTS ----------------
+@app.route("/shopify/webhook/fulfillments", methods=["POST"])
+def shopify_fulfillments():
+    data = request.get_data()
+    hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
+
+    if not verify_webhook(data, hmac_header):
+        return "Unauthorized", 401
+
+    payload = request.json
+
+    order_id = payload.get("order_id")
+    if not order_id:
+        return jsonify({"status": "no order id"}), 200
+
+    update_shipping_status(str(order_id), "Shipped")
+    return jsonify({"status": "shipped"})
