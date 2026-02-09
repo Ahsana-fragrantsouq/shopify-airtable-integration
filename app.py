@@ -11,13 +11,16 @@ print("🚀 Flask Shopify Airtable Service Starting...", flush=True)
 
 # ---------------- ENV ----------------
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
-AIRTABLE_BASE_ID = "app2jovFGPe7hkYdB"
+
+# ✅ FIX: NEW Airtable base (FragrantSouq test)
+AIRTABLE_BASE_ID = "appJsqKCta3lkgdJJ"
+
 SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 
-# Airtable TABLE IDs
+# ✅ Table IDs from NEW base
 CUSTOMERS_TABLE = "tblas8rMuwMEAtjIv"
 ORDERS_TABLE    = "tbl1bAQM8lBgsGrqh"
-SKU_TABLE       = "tblI3DHGUT2GRINfw"  # French Inventories
+SKU_TABLE       = "tblI3DHGUT2GRINfw"   # French Inventories
 
 AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -37,7 +40,6 @@ def verify_webhook(data, hmac_header):
 
     computed_hmac = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(computed_hmac, hmac_header)
-
 
 # ---------------- AIRTABLE HELPERS ----------------
 def find_customer(phone, email):
@@ -91,7 +93,6 @@ def find_sku_record(sku):
 
     return None
 
-
 # ---------------- DUPLICATE CHECK ----------------
 def order_exists(order_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
@@ -101,7 +102,6 @@ def order_exists(order_id):
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
     return bool(r.json().get("records"))
-
 
 # ---------------- SHIPPING STATUS UPDATE ----------------
 def update_shipping_status(order_id, status):
@@ -128,7 +128,6 @@ def update_shipping_status(order_id, status):
 
     requests.patch(update_url, headers=AIRTABLE_HEADERS, json=payload)
     print(f"🚚 Shipping Status updated → {status}", flush=True)
-
 
 # ---------------- ORDER CREATION ----------------
 def create_order(order, customer_id):
@@ -166,12 +165,11 @@ def create_order(order, customer_id):
     print("📨 Order insert status:", r.status_code, flush=True)
     print("📨 Order insert body:", r.text, flush=True)
 
-
 # ---------------- MAIN LOGIC (ORDERS) ----------------
 def process_order(order):
     order_id = str(order["id"])
 
-    # If already exists → do nothing here
+    # ✅ Correct duplicate prevention (now checks NEW base)
     if order_exists(order_id):
         return
 
@@ -195,7 +193,6 @@ def process_order(order):
 
     create_order(order, customer_id)
 
-
 # ---------------- WEBHOOK : ORDERS ----------------
 @app.route("/shopify/webhook/orders", methods=["POST"])
 def shopify_orders():
@@ -208,7 +205,6 @@ def shopify_orders():
     process_order(request.json)
     return jsonify({"status": "ok"})
 
-
 # ---------------- WEBHOOK : FULFILLMENTS ----------------
 @app.route("/shopify/webhook/fulfillments", methods=["POST"])
 def shopify_fulfillments():
@@ -219,8 +215,8 @@ def shopify_fulfillments():
         return "Unauthorized", 401
 
     payload = request.json
-
     order_id = payload.get("order_id")
+
     if not order_id:
         return jsonify({"status": "no order id"}), 200
 
