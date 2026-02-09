@@ -7,11 +7,11 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-print("🚀 Flask Shopify → Airtable Service Started", flush=True)
+print("🚀 Shopify → Airtable service started", flush=True)
 
 # ---------------- ENV ----------------
 AIRTABLE_TOKEN = os.getenv("AIRTABLE_TOKEN")
-AIRTABLE_BASE_ID = "app2jovFGPe7hkYdB"
+AIRTABLE_BASE_ID = "appJsqKCta3lkgdJJ"   # NEW BASE
 SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 
 CUSTOMERS_TABLE = "tblas8rMuwMEAtjIv"
@@ -37,7 +37,7 @@ def verify_webhook(data, hmac_header):
     computed = base64.b64encode(digest).decode()
     return hmac.compare_digest(computed, hmac_header)
 
-# ---------------- AIRTABLE HELPERS ----------------
+# ---------------- HELPERS ----------------
 def order_exists(order_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
@@ -45,121 +45,33 @@ def order_exists(order_id):
         headers=AIRTABLE_HEADERS,
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
-    exists = bool(r.json().get("records"))
-    print(f"🔎 Order {order_id} exists in Airtable:", exists, flush=True)
-    return exists
+    return bool(r.json().get("records"))
 
+def update_shipping_status(order_id, status):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
 
-def find_customer(phone, email):
-    if phone:
-        formula = f"{{Contact Number}}='{phone}'"
-    elif email:
-        formula = f"{{Mail id}}='{email}'"
-    else:
-        return None
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
-    r = requests.get(url, headers=AIRTABLE_HEADERS, params={"filterByFormula": formula})
-    records = r.json().get("records", [])
-    return records[0]["id"] if records else None
-
-
-def create_customer(customer):
-    print("➕ Creating customer:", customer["name"], flush=True)
-
-    payload = {
-        "fields": {
-            "Name": customer["name"],
-            "Mail id": customer.get("email"),
-            "Contact Number": customer.get("phone"),
-            "Address": customer.get("address"),
-            "Acquired sales channel": "Shopify"
-        }
-    }
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
-    r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
-    return r.json().get("id")
-
-
-def find_sku_record(sku):
-    if not sku:
-        return None
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{SKU_TABLE}"
     r = requests.get(
         url,
         headers=AIRTABLE_HEADERS,
-        params={"filterByFormula": f"{{SKU}}='{sku}'"}
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
+
     records = r.json().get("records", [])
-    return records[0]["id"] if records else None
-
-
-# ---------------- CREATE ORDER ----------------
-def create_order(order, customer_id):
-    print("🧾 Creating NEW order in Airtable", flush=True)
-
-    order_date = order["created_at"].split("T")[0]
-
-    sku_records = []
-    for line in order.get("line_items", []):
-        sku_id = find_sku_record(line.get("sku"))
-        if sku_id:
-            sku_records.append(sku_id)
-
-    fields = {
-        "Order ID": str(order["id"]),
-        "Order Number": order.get("name", "").replace("#", ""),
-        "Customer": [customer_id],
-        "Order Date": order_date,
-        "Total Order Amount": float(order["subtotal_price"]),
-        "Payment Status": order["financial_status"].capitalize(),
-        "Shipping Status": "New",
-        "Sales Channel": "Online Store",
-        "Order Packing Slip": [{"url": order.get("order_status_url")}]
-    }
-
-    if sku_records:
-        fields["Item SKU"] = sku_records
-        fields["Brands"] = sku_records
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
-    r = requests.post(url, headers=AIRTABLE_HEADERS, json={"fields": fields})
-
-    print("📨 Airtable response:", r.status_code, r.text, flush=True)
-
-
-# ---------------- MAIN ORDER LOGIC ----------------
-def process_order(order):
-    order_id = str(order["id"])
-    print("📦 Shopify Order Received:", order_id, flush=True)
-
-    # ✅ ONLY NEW ORDERS
-    if order_exists(order_id):
-        print("⏭️ Existing order ignored (as designed)", flush=True)
+    if not records:
+        print("⚠️ Order not found in Airtable for shipping update", flush=True)
         return
 
-    customer = order.get("customer") or {}
+    record_id = records[0]["id"]
 
-    customer_id = find_customer(customer.get("phone"), customer.get("email"))
-    if not customer_id:
-        customer_id = create_customer({
-            "name": f"{customer.get('first_name','')} {customer.get('last_name','')}".strip() or "Unknown",
-            "email": customer.get("email"),
-            "phone": customer.get("phone"),
-            "address": order.get("shipping_address", {}).get("address1")
-        })
+    requests.patch(
+        f"{url}/{record_id}",
+        headers=AIRTABLE_HEADERS,
+        json={"fields": {"Shipping Status": status}}
+    )
 
-    if not customer_id:
-        print("❌ Customer creation failed", flush=True)
-        return
+    print(f"🚚 Shipping Status updated → {status}", flush=True)
 
-    create_order(order, customer_id)
-    print("✅ New order saved to Airtable", flush=True)
-
-
-# ---------------- WEBHOOK ----------------
+# ---------------- ORDERS ----------------
 @app.route("/shopify/webhook/orders", methods=["POST"])
 def shopify_orders():
     data = request.get_data()
@@ -168,5 +80,51 @@ def shopify_orders():
     if not verify_webhook(data, hmac_header):
         return "Unauthorized", 401
 
-    process_order(request.json)
-    return jsonify({"status": "ok"})
+    order = request.json
+    order_id = str(order["id"])
+
+    # ONLY NEW ORDERS
+    if order_exists(order_id):
+        print("⏭️ Order already exists, skipped", flush=True)
+        return jsonify({"status": "skipped"})
+
+    print("🧾 Creating new order in Airtable", flush=True)
+
+    order_date = order["created_at"].split("T")[0]
+
+    fields = {
+        "Order ID": order_id,
+        "Order Number": order.get("name", "").replace("#", ""),
+        "Order Date": order_date,
+        "Shipping Status": "New",
+        "Payment Status": order["financial_status"].capitalize(),
+        "Sales Channel": "Online Store",
+        "Order Packing Slip": [{"url": order.get("order_status_url")}]
+    }
+
+    requests.post(
+        f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}",
+        headers=AIRTABLE_HEADERS,
+        json={"fields": fields}
+    )
+
+    print("✅ Order created", flush=True)
+    return jsonify({"status": "created"})
+
+# ---------------- FULFILLMENTS ----------------
+@app.route("/shopify/webhook/fulfillments", methods=["POST"])
+def shopify_fulfillments():
+    data = request.get_data()
+    hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
+
+    if not verify_webhook(data, hmac_header):
+        return "Unauthorized", 401
+
+    payload = request.json
+    order_id = payload.get("order_id")
+
+    if not order_id:
+        return jsonify({"status": "no order id"})
+
+    update_shipping_status(str(order_id), "Shipped")
+    return jsonify({"status": "shipped"})
