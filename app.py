@@ -17,7 +17,7 @@ SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 # Airtable TABLE IDs
 CUSTOMERS_TABLE        = "tbldpymKhQIwK5qGP"   # Customers
 ORDER_LINE_ITEMS_TABLE = "tblW0STW6AGKaFCOT"   # Order Line Items
-SKU_TABLE              = "tblI3DHGUT2GRINfw"   # French Inventories
+SKU_TABLE              = "tblL03CEHdYy1kUdQ"     # French Inventories
 
 AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
