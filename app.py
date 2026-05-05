@@ -165,9 +165,6 @@ def create_order_line_items(order, customer_id):
       Rate             ← line_item.price  (price per unit)
       Qty              ← line_item.quantity
       Tax Type         ← tax rate as percentage string e.g. "5%"
-      Sub Total        ← Rate × Qty
-      Tax Amount       ← sum of tax_lines prices
-      Amount           ← Sub Total + Tax Amount
       Payment Status   ← mapped from order.financial_status
       Shipping Status  ← "New"
       Sales Channel    ← "Shopify"
@@ -194,8 +191,7 @@ def create_order_line_items(order, customer_id):
         tax_lines  = line.get("tax_lines", [])
         tax_rate   = tax_lines[0].get("rate", 0) if tax_lines else 0
         tax_pct    = f"{int(tax_rate * 100)}%"
-        tax_amount = round(sum(float(t.get("price", 0)) for t in tax_lines), 2)
-        amount     = round(sub_total + tax_amount, 2)
+        
 
         fields = {
             "Order ID":        order_id,
@@ -205,9 +201,6 @@ def create_order_line_items(order, customer_id):
             "Rate":            price,
             "Qty":             qty,
             "Tax Type":        tax_pct,
-            "Sub Total":       sub_total,
-            "Tax Amount":      tax_amount,
-            "Amount":          amount,
             "Payment Status":  payment_status,
             "Shipping Status": "New",
             "Sales Channel":   "Shopify",
