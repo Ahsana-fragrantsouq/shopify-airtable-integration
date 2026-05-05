@@ -73,16 +73,21 @@ def find_customer(phone, email):
 def create_customer(customer):
     payload = {
         "fields": {
-            "Name":                    customer["name"],
-            "Mail id":                 customer.get("email"),
-            "Contact Number":          customer.get("phone"),
-            "Address":                 customer.get("address"),
-            "Acquired sales channel":  "Shopify"
+            "Name":                   customer["name"],
+            "Mail id":                customer.get("email"),
+            "Contact Number":         customer.get("phone"),
+            "Address":                customer.get("address"),
+            "Acquired sales channel": "Shopify"
         }
     }
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
+
+    # ADD THESE TWO LINES
+    print(f"👤 Customer create status: {r.status_code}", flush=True)
+    print(f"👤 Customer create response: {r.text}", flush=True)
+
     return r.json().get("id")
 
 
