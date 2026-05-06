@@ -757,6 +757,22 @@ def test_airtable_direct():
         "token_used": token[:15] + "..."
     })
 
+@app.route("/test-customer-search")
+def test_customer_search():
+    email = request.args.get("email", "")
+    phone = request.args.get("phone", "")
+
+    results = {}
+
+    if email:
+        records = airtable_search(CUSTOMERS_TABLE_ID, f"{{Mail id}}='{email}'")
+        results["email_search"] = [r["fields"].get("Name") for r in records]
+
+    if phone:
+        records = airtable_search(CUSTOMERS_TABLE_ID, f"{{Contact Number}}='{phone}'")
+        results["phone_search"] = [r["fields"].get("Name") for r in records]
+
+    return jsonify(results)
 # ======================================================
 # RUN
 # ======================================================
