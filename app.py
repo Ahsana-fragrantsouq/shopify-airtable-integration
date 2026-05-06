@@ -16,8 +16,9 @@ SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 
 # Airtable TABLE IDs
 CUSTOMERS_TABLE        = "tbldpymKhQIwK5qGP"   # Customers
+ORDERS_TABLE           = "tbl480LKVFx8CiyoB"   # Orders
 ORDER_LINE_ITEMS_TABLE = "tblW0STW6AGKaFCOT"   # Order Line Items
-SKU_TABLE              = "tblL03CEHdYy1kUdQ"     # French Inventories
+SKU_TABLE              = "tblL03CEHdYy1kUdQ"   # French Inventories
 
 AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
@@ -25,28 +26,25 @@ AIRTABLE_HEADERS = {
 }
 
 # ---------------- SHOPIFY → AIRTABLE PAYMENT STATUS MAP ----------------
-# Shopify financial_status  →  Airtable Payment Status select value
 PAYMENT_STATUS_MAP = {
-    "paid":             "Paid",
-    "pending":          "Pending",
-    "partially_paid":   "Pending",
-    "refunded":         "Refunded",
-    "voided":           "Voided",
+    "paid":               "Paid",
+    "pending":            "Pending",
+    "partially_paid":     "Pending",
+    "refunded":           "Refunded",
+    "voided":             "Voided",
     "partially_refunded": "Refunded",
-    "authorized":       "Pending",
+    "authorized":         "Pending",
 }
 
 # ---------------- SECURITY ----------------
 def verify_webhook(data, hmac_header):
     if not hmac_header:
         return False
-
     digest = hmac.new(
         SHOPIFY_WEBHOOK_SECRET.encode("utf-8"),
         data,
         hashlib.sha256
     ).digest()
-
     computed_hmac = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(computed_hmac, hmac_header)
 
@@ -66,7 +64,6 @@ def find_customer(phone, email):
 
     if data.get("records"):
         return data["records"][0]["id"]
-
     return None
 
 
@@ -80,25 +77,16 @@ def create_customer(customer):
             "Acquired sales channel": "Shopify"
         }
     }
-
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{CUSTOMERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json=payload)
-
-    # ADD THESE TWO LINES
     print(f"👤 Customer create status: {r.status_code}", flush=True)
     print(f"👤 Customer create response: {r.text}", flush=True)
-
     return r.json().get("id")
 
 
 def find_sku_record(sku):
-    """
-    Looks up a record in French Inventories by SKU field.
-    Returns the Airtable record ID (used to link into 'Product' field).
-    """
     if not sku:
         return None
-
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{SKU_TABLE}"
     r = requests.get(
         url,
@@ -106,59 +94,116 @@ def find_sku_record(sku):
         params={"filterByFormula": f"{{SKU}}='{sku}'"}
     )
     data = r.json()
-
     if data.get("records"):
         return data["records"][0]["id"]
-
     return None
 
 
 # ---------------- DUPLICATE CHECK ----------------
 def order_exists(order_id):
-    """Returns True if any line item row already exists for this Shopify order ID."""
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    """Returns the Airtable record ID if the order already exists in Orders table, else None."""
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
         url,
         headers=AIRTABLE_HEADERS,
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
-    return bool(r.json().get("records"))
+    records = r.json().get("records", [])
+    if records:
+        return records[0]["id"]
+    return None
+
+
+# ---------------- ORDERS TABLE ----------------
+def create_order_record(order, customer_id):
+    """
+    Creates a record in the Orders table.
+
+    Field mapping:
+      Order ID         ← order.id  (text)
+      Order Number     ← order.name stripped of '#'  (text)
+      Customer         ← linked record ID from Customers table
+      Order Date       ← order.created_at (date only)
+      Sales Channel    ← "Shopify"
+      Payment Status   ← mapped from order.financial_status
+      Shipping Status  ← "New"
+    """
+    order_date     = order["created_at"].split("T")[0]
+    order_id       = str(order["id"])
+    order_number   = order.get("name", "").replace("#", "")
+    shopify_status = order.get("financial_status", "pending").lower()
+    payment_status = PAYMENT_STATUS_MAP.get(shopify_status, "Pending")
+
+    fields = {
+        "Order ID":       order_id,
+        "Order Number":   order_number,
+        "Customer":       [customer_id],
+        "Order Date":     order_date,
+        "Sales Channel":  "Shopify",
+        "Payment Status": payment_status,
+        "Shipping Status": "New",
+    }
+
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.post(url, headers=AIRTABLE_HEADERS, json={"fields": fields})
+
+    if r.status_code in (200, 201):
+        order_record_id = r.json().get("id")
+        print(f"✅ Created Orders record: {order_number} (Airtable ID: {order_record_id})", flush=True)
+        return order_record_id
+    else:
+        print(f"❌ Failed to create Orders record: {r.status_code} — {r.text}", flush=True)
+        return None
 
 
 # ---------------- SHIPPING STATUS UPDATE ----------------
 def update_shipping_status(order_id, status):
-    """Updates Shipping Status on ALL line item rows for this order."""
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    """Updates Shipping Status on the Orders record AND all Order Line Items for this order."""
 
+    # --- Update Orders table ---
+    orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
-        url,
+        orders_url,
         headers=AIRTABLE_HEADERS,
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
+    order_records = r.json().get("records", [])
+    for record in order_records:
+        requests.patch(
+            f"{orders_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {"Shipping Status": status}}
+        )
+    print(f"🚚 Orders table Shipping Status → '{status}'", flush=True)
 
-    records = r.json().get("records", [])
-    if not records:
+    # --- Update Order Line Items table ---
+    line_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    r = requests.get(
+        line_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    line_records = r.json().get("records", [])
+    if not line_records:
         print(f"⚠️ No line items found for Order ID {order_id}", flush=True)
-        return
-
-    for record in records:
-        record_id  = record["id"]
-        update_url = f"{url}/{record_id}"
-        requests.patch(update_url, headers=AIRTABLE_HEADERS, json={
-            "fields": {"Shipping Status": status}
-        })
-
-    print(f"🚚 Shipping Status → '{status}' on {len(records)} line item(s)", flush=True)
+    for record in line_records:
+        requests.patch(
+            f"{line_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {"Shipping Status": status}}
+        )
+    print(f"🚚 Order Line Items Shipping Status → '{status}' on {len(line_records)} row(s)", flush=True)
 
 
 # ---------------- ORDER LINE ITEM CREATION ----------------
-def create_order_line_items(order, customer_id):
+def create_order_line_items(order, customer_id, order_record_id):
     """
     Creates ONE Airtable record per Shopify line item in Order Line Items table.
 
     Field mapping:
       Product          ← linked record ID from French Inventories (matched by SKU)
-      Order ID         ← order.id  (text, used for dedup & fulfillment lookup)
+      Order            ← linked record ID from Orders table
+      Order ID         ← order.id  (text, used for fulfillment lookup)
       Order Number     ← order.name stripped of '#'
       Customer         ← linked record ID from Customers table
       Order Date       ← order.created_at (date only)
@@ -180,18 +225,15 @@ def create_order_line_items(order, customer_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
 
     for line in order.get("line_items", []):
-        sku       = line.get("sku")
-        product_id = find_sku_record(sku)  # French Inventories record ID
+        sku        = line.get("sku")
+        product_id = find_sku_record(sku)
 
         price     = float(line.get("price", 0))
         qty       = int(line.get("quantity", 1))
-        sub_total = round(price * qty, 2)
 
-        # Tax calculation from Shopify tax_lines
-        tax_lines  = line.get("tax_lines", [])
-        tax_rate   = tax_lines[0].get("rate", 0) if tax_lines else 0
-        tax_pct    = f"{int(tax_rate * 100)}%"
-        
+        tax_lines = line.get("tax_lines", [])
+        tax_rate  = tax_lines[0].get("rate", 0) if tax_lines else 0
+        tax_pct   = f"{int(tax_rate * 100)}%"
 
         fields = {
             "Order ID":        order_id,
@@ -206,8 +248,11 @@ def create_order_line_items(order, customer_id):
             "Sales Channel":   "Shopify",
         }
 
+        # Link to Orders table
+        if order_record_id:
+            fields["Order"] = [order_record_id]
+
         # Link to French Inventories via 'Product' field
-        # SKU (from Product) and Product Name (from Product) are auto-populated lookups
         if product_id:
             fields["Product"] = [product_id]
         else:
@@ -225,10 +270,13 @@ def create_order_line_items(order, customer_id):
 def process_order(order):
     order_id = str(order["id"])
 
-    if order_exists(order_id):
-        print(f"⏭️ Order {order_id} already exists — skipping", flush=True)
+    # Step 1 — Deduplicate against Orders table
+    existing_order_record_id = order_exists(order_id)
+    if existing_order_record_id:
+        print(f"⏭️ Order {order_id} already exists in Orders table — skipping", flush=True)
         return
 
+    # Step 2 — Find or create customer
     customer    = order.get("customer") or {}
     customer_id = find_customer(customer.get("phone"), customer.get("email"))
 
@@ -244,7 +292,14 @@ def process_order(order):
         print("❌ Could not find or create customer — aborting order", flush=True)
         return
 
-    create_order_line_items(order, customer_id)
+    # Step 3 — Create record in Orders table
+    order_record_id = create_order_record(order, customer_id)
+    if not order_record_id:
+        print("❌ Could not create Orders record — aborting line items", flush=True)
+        return
+
+    # Step 4 — Create line items linked to the Orders record
+    create_order_line_items(order, customer_id, order_record_id)
 
 
 # ---------------- WEBHOOK : ORDERS ----------------
