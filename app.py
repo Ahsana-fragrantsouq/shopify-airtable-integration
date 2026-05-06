@@ -70,7 +70,7 @@ def find_customer(phone, email):
 def create_customer(customer):
     payload = {
         "fields": {
-            "Name":                   customer["name"],
+            "Customer Name":          customer["name"],
             "Mail id":                customer.get("email"),
             "Contact Number":         customer.get("phone"),
             "Address":                customer.get("address"),
