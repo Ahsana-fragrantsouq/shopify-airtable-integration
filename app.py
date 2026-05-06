@@ -121,7 +121,6 @@ def create_order_record(order, customer_id):
 
     Field mapping:
       Order ID         ← order.id  (text)
-      Order Number     ← order.name stripped of '#'  (text)
       Customer         ← linked record ID from Customers table
       Order Date       ← order.created_at (date only)
       Sales Channel    ← "Shopify"
@@ -135,12 +134,11 @@ def create_order_record(order, customer_id):
     payment_status = PAYMENT_STATUS_MAP.get(shopify_status, "Pending")
 
     fields = {
-        "Order ID":       order_id,
-        "Order Number":   order_number,
-        "Customer":       [customer_id],
-        "Order Date":     order_date,
-        "Sales Channel":  "Shopify",
-        "Payment Status": payment_status,
+        "Order ID":        order_id,
+        "Customer":        [customer_id],
+        "Order Date":      order_date,
+        "Sales Channel":   "Shopify",
+        "Payment Status":  payment_status,
         "Shipping Status": "New",
     }
 
