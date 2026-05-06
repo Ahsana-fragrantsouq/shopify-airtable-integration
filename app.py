@@ -331,3 +331,7 @@ def shopify_fulfillments():
 
     update_shipping_status(str(order_id), "Shipped")
     return jsonify({"status": "shipped"})
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "ok", 200
