@@ -13,6 +13,8 @@ print("🚀 Flask Shopify Airtable Service Starting...", flush=True)
 AIRTABLE_TOKEN         = os.getenv("AIRTABLE_TOKEN")
 AIRTABLE_BASE_ID       = "app5gOqDt9aZrW5bV"
 SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
+SHOPIFY_STORE          = os.getenv("SHOPIFY_STORE")   # e.g. fragrantsouq
+SHOPIFY_TOKEN          = os.getenv("SHOPIFY_TOKEN")   # Admin API access token
 
 # Airtable TABLE IDs
 CUSTOMERS_TABLE        = "tbldpymKhQIwK5qGP"   # Customers
@@ -101,7 +103,6 @@ def find_sku_record(sku):
 
 # ---------------- DUPLICATE CHECK ----------------
 def order_exists(order_id):
-    """Returns the Airtable record ID if the order already exists in Orders table, else None."""
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
         url,
@@ -116,17 +117,6 @@ def order_exists(order_id):
 
 # ---------------- ORDERS TABLE ----------------
 def create_order_record(order, customer_id):
-    """
-    Creates a record in the Orders table.
-
-    Field mapping:
-      Order ID         ← order.id  (text)
-      Customer         ← linked record ID from Customers table
-      Order Date       ← order.created_at (date only)
-      Sales Channel    ← "Shopify"
-      Payment Status   ← mapped from order.financial_status
-      Shipping Status  ← "New"
-    """
     order_date   = order["created_at"].split("T")[0]
     order_id     = str(order["id"])
     order_number = order.get("name", "").replace("#", "")
@@ -153,8 +143,6 @@ def create_order_record(order, customer_id):
 
 # ---------------- SHIPPING STATUS UPDATE ----------------
 def update_shipping_status(order_id, status):
-    """Updates Shipping Status on the Orders record AND all Order Line Items for this order."""
-
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
@@ -192,23 +180,6 @@ def update_shipping_status(order_id, status):
 
 # ---------------- ORDER LINE ITEM CREATION ----------------
 def create_order_line_items(order, customer_id, order_record_id):
-    """
-    Creates ONE Airtable record per Shopify line item in Order Line Items table.
-
-    Field mapping:
-      Product          ← linked record ID from French Inventories (matched by SKU)
-      Order            ← linked record ID from Orders table
-      Order ID         ← order.id  (text, used for fulfillment lookup)
-      Order Number     ← order.name stripped of '#'
-      Customer         ← linked record ID from Customers table
-      Order Date       ← order.created_at (date only)
-      Rate             ← line_item.price  (price per unit)
-      Qty              ← line_item.quantity
-      Tax Type         ← tax rate as percentage string e.g. "5%"
-      Payment Status   ← mapped from order.financial_status
-      Shipping Status  ← "New"
-      Sales Channel    ← "Shopify"
-    """
     print("🧾 Creating order line item records...", flush=True)
 
     order_date     = order["created_at"].split("T")[0]
@@ -243,11 +214,9 @@ def create_order_line_items(order, customer_id, order_record_id):
             "Sales Channel":   "Shopify",
         }
 
-        # Link to Orders table
         if order_record_id:
             fields["Order"] = [order_record_id]
 
-        # Link to French Inventories via 'Product' field
         if product_id:
             fields["Product"] = [product_id]
         else:
@@ -265,13 +234,11 @@ def create_order_line_items(order, customer_id, order_record_id):
 def process_order(order):
     order_id = str(order["id"])
 
-    # Step 1 — Deduplicate against Orders table
     existing_order_record_id = order_exists(order_id)
     if existing_order_record_id:
         print(f"⏭️ Order {order_id} already exists in Orders table — skipping", flush=True)
         return
 
-    # Step 2 — Find or create customer
     customer    = order.get("customer") or {}
     customer_id = find_customer(customer.get("phone"), customer.get("email"))
 
@@ -280,20 +247,18 @@ def process_order(order):
             "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
             "email":   customer.get("email"),
             "phone":   customer.get("phone"),
-            "address": order.get("shipping_address", {}).get("address1")
+            "address": (order.get("shipping_address") or {}).get("address1")
         })
 
     if not customer_id:
         print("❌ Could not find or create customer — aborting order", flush=True)
         return
 
-    # Step 3 — Create record in Orders table
     order_record_id = create_order_record(order, customer_id)
     if not order_record_id:
         print("❌ Could not create Orders record — aborting line items", flush=True)
         return
 
-    # Step 4 — Create line items linked to the Orders record
     create_order_line_items(order, customer_id, order_record_id)
 
 
@@ -303,9 +268,8 @@ def shopify_orders():
     data        = request.get_data()
     hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
 
-    
     if not verify_webhook(data, hmac_header):
-       return "Unauthorized", 401
+        return "Unauthorized", 401
 
     process_order(request.json)
     return jsonify({"status": "ok"})
@@ -328,6 +292,96 @@ def shopify_fulfillments():
 
     update_shipping_status(str(order_id), "Shipped")
     return jsonify({"status": "shipped"})
+
+
+# ---------------- SYNC ALL SHOPIFY ORDERS ----------------
+def fetch_all_shopify_orders():
+    orders = []
+    url    = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
+    params = {"limit": 250, "status": "any"}
+
+    while url:
+        r     = requests.get(url, headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}, params=params)
+        batch = r.json().get("orders", [])
+        orders.extend(batch)
+        print(f"📦 Fetched {len(batch)} orders (total: {len(orders)})", flush=True)
+
+        link   = r.headers.get("Link", "")
+        url    = None
+        params = {}
+        if 'rel="next"' in link:
+            for part in link.split(","):
+                if 'rel="next"' in part:
+                    url = part.split(";")[0].strip().strip("<>")
+                    break
+
+    return orders
+
+
+@app.route("/sync", methods=["GET"])
+def sync_all_orders():
+    if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+        return jsonify({
+            "status":  "error",
+            "message": "SHOPIFY_STORE or SHOPIFY_TOKEN env variable not set in Render"
+        }), 500
+
+    print("🔄 Manual sync triggered...", flush=True)
+
+    all_orders = fetch_all_shopify_orders()
+    print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
+
+    synced  = 0
+    skipped = 0
+    failed  = 0
+
+    for order in all_orders:
+        order_name = order.get("name", "?")
+        try:
+            order_id = str(order["id"])
+            if order_exists(order_id):
+                print(f"⏭️ {order_name} already exists — skipping", flush=True)
+                skipped += 1
+                continue
+
+            customer    = order.get("customer") or {}
+            customer_id = find_customer(customer.get("phone"), customer.get("email"))
+
+            if not customer_id:
+                customer_id = create_customer({
+                    "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
+                    "email":   customer.get("email"),
+                    "phone":   customer.get("phone"),
+                    "address": (order.get("shipping_address") or {}).get("address1")
+                })
+
+            if not customer_id:
+                print(f"❌ {order_name} — could not find/create customer", flush=True)
+                failed += 1
+                continue
+
+            order_record_id = create_order_record(order, customer_id)
+            if not order_record_id:
+                failed += 1
+                continue
+
+            create_order_line_items(order, customer_id, order_record_id)
+            print(f"✅ {order_name} synced", flush=True)
+            synced += 1
+
+        except Exception as e:
+            print(f"❌ {order_name} — error: {e}", flush=True)
+            failed += 1
+
+    result = {
+        "status":       "done",
+        "total_orders": len(all_orders),
+        "synced":       synced,
+        "skipped":      skipped,
+        "failed":       failed
+    }
+    print(f"🎉 Sync complete: {result}", flush=True)
+    return jsonify(result)
 
 
 # ---------------- HEALTH CHECK ----------------
