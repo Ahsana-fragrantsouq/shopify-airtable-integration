@@ -208,7 +208,7 @@ def create_order_line_items(order, customer_id, order_record_id):
             "Order Date":      order_date,
             "Rate":            price,
             "Qty":             qty,
-            "Tax Type":        tax_pct,
+            "Tax Type":        "5%",
             "Payment Status":  payment_status,
             "Shipping Status": "New",
             "Sales Channel":   "Shopify",
