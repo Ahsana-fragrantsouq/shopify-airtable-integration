@@ -174,6 +174,58 @@ def order_exists(order_id):
     return None
 
 
+# ---------------- UPDATE EXISTING ORDER STATUSES ----------------
+def refresh_existing_order_statuses(order):
+    """
+    Refresh Shipping Status (Orders + Line Items) and Payment Status (Line Items)
+    on records that already exist in Airtable, based on current Shopify state.
+    """
+    order_id     = str(order["id"])
+    order_number = order.get("name", "?")
+
+    shipping_status = determine_shipping_status_from_order(order)
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
+
+    # --- Update Orders table ---
+    orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        orders_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    for record in r.json().get("records", []):
+        requests.patch(
+            f"{orders_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {"Shipping Status": shipping_status}}
+        )
+
+    # --- Update Order Line Items table ---
+    line_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    r = requests.get(
+        line_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    line_records = r.json().get("records", [])
+    for record in line_records:
+        requests.patch(
+            f"{line_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
+        )
+
+    print(
+        f"🔄 {order_number} refreshed → Shipping: {shipping_status}, "
+        f"Payment: {payment_status} ({len(line_records)} line item(s))",
+        flush=True
+    )
+
+
 # ---------------- ORDERS TABLE ----------------
 def create_order_record(order, customer_id):
     order_date   = order["created_at"].split("T")[0]
@@ -393,7 +445,7 @@ def sync_all_orders():
     print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
 
     synced  = 0
-    skipped = 0
+    updated = 0
     failed  = 0
 
     for order in all_orders:
@@ -401,8 +453,8 @@ def sync_all_orders():
         try:
             order_id = str(order["id"])
             if order_exists(order_id):
-                print(f"⏭️ {order_name} already exists — skipping", flush=True)
-                skipped += 1
+                refresh_existing_order_statuses(order)
+                updated += 1
                 continue
 
             customer    = order.get("customer") or {}
@@ -438,7 +490,7 @@ def sync_all_orders():
         "status":       "done",
         "total_orders": len(all_orders),
         "synced":       synced,
-        "skipped":      skipped,
+        "updated":      updated,
         "failed":       failed
     }
     print(f"🎉 Sync complete: {result}", flush=True)
