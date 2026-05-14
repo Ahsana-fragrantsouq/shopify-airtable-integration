@@ -38,6 +38,65 @@ PAYMENT_STATUS_MAP = {
     "authorized":         "Pending",
 }
 
+# ---------------- SHOPIFY → AIRTABLE SHIPPING STATUS LOGIC ----------------
+SHIPPED_STATUSES = {
+    "label_printed",
+    "label_purchased",
+    "attempted_delivery",
+    "ready_for_pickup",
+    "confirmed",
+    "in_transit",
+    "out_for_delivery",
+}
+
+def determine_shipping_status_from_order(order):
+    """
+    Determine Airtable Shipping Status from a Shopify order's current state.
+    Walks through any existing fulfillments and returns the most advanced state.
+    """
+    fulfillments = order.get("fulfillments") or []
+    fulfillment_status = (order.get("fulfillment_status") or "").lower()
+
+    has_delivered = False
+    has_shipped   = False
+    has_fulfilled = False
+
+    for f in fulfillments:
+        shipment_status = (f.get("shipment_status") or "").lower()
+        f_status        = (f.get("status") or "").lower()
+
+        if shipment_status == "delivered":
+            has_delivered = True
+        elif shipment_status in SHIPPED_STATUSES:
+            has_shipped = True
+        elif f_status == "success":
+            has_fulfilled = True
+
+    if has_delivered:
+        return "Delivered"
+    if has_shipped:
+        return "Shipped"
+    if has_fulfilled or fulfillment_status in ("fulfilled", "partial"):
+        return "Fulfilled"
+    return "New"
+
+
+def determine_shipping_status_from_fulfillment(fulfillment):
+    """
+    Determine Airtable Shipping Status from a Shopify fulfillment webhook payload.
+    """
+    shipment_status = (fulfillment.get("shipment_status") or "").lower()
+    f_status        = (fulfillment.get("status") or "").lower()
+
+    if shipment_status == "delivered":
+        return "Delivered"
+    if shipment_status in SHIPPED_STATUSES:
+        return "Shipped"
+    if f_status == "success":
+        return "Fulfilled"
+    return "Fulfilled"
+
+
 # ---------------- SECURITY ----------------
 def verify_webhook(data, hmac_header):
     if not hmac_header or not SHOPIFY_WEBHOOK_SECRET:
@@ -126,7 +185,7 @@ def create_order_record(order, customer_id):
         "Customer":        [customer_id],
         "Order Date":      order_date,
         "Sales Channel":   "Shopify",
-        "Shipping Status": "New",
+        "Shipping Status": determine_shipping_status_from_order(order),
     }
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
@@ -187,6 +246,7 @@ def create_order_line_items(order, customer_id, order_record_id):
     order_number   = order.get("name", "").replace("#", "")
     shopify_status = order.get("financial_status", "pending").lower()
     payment_status = PAYMENT_STATUS_MAP.get(shopify_status, "Pending")
+    shipping_status = determine_shipping_status_from_order(order)
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
 
@@ -210,7 +270,7 @@ def create_order_line_items(order, customer_id, order_record_id):
             "Qty":             qty,
             "Tax Type":        "5%",
             "Payment Status":  payment_status,
-            "Shipping Status": "New",
+            "Shipping Status": shipping_status,
             "Sales Channel":   "Shopify",
         }
 
@@ -290,8 +350,9 @@ def shopify_fulfillments():
     if not order_id:
         return jsonify({"status": "no order id"}), 200
 
-    update_shipping_status(str(order_id), "Shipped")
-    return jsonify({"status": "shipped"})
+    new_status = determine_shipping_status_from_fulfillment(payload)
+    update_shipping_status(str(order_id), new_status)
+    return jsonify({"status": new_status.lower()})
 
 
 # ---------------- SYNC ALL SHOPIFY ORDERS ----------------
