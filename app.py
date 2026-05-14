@@ -182,8 +182,9 @@ def order_exists(order_id):
 # ---------------- UPDATE EXISTING ORDER STATUSES ----------------
 def refresh_existing_order_statuses(order):
     """
-    Refresh Shipping Status (Orders + Line Items) and Payment Status (Line Items)
-    on records that already exist in Airtable, based on current Shopify state.
+    Refresh Shipping Status + Payment Status on records that already exist
+    in Airtable, based on current Shopify state.
+    Updates both Orders table and Order Line Items table.
     """
     order_id     = str(order["id"])
     order_number = order.get("name", "?")
@@ -203,7 +204,10 @@ def refresh_existing_order_statuses(order):
         requests.patch(
             f"{orders_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {"Shipping Status": shipping_status}}
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
         )
 
     # --- Update Order Line Items table ---
@@ -233,9 +237,11 @@ def refresh_existing_order_statuses(order):
 
 # ---------------- ORDERS TABLE ----------------
 def create_order_record(order, customer_id):
-    order_date   = order["created_at"].split("T")[0]
-    order_id     = str(order["id"])
-    order_number = order.get("name", "").replace("#", "")
+    order_date      = order["created_at"].split("T")[0]
+    order_id        = str(order["id"])
+    order_number    = order.get("name", "").replace("#", "")
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
     fields = {
         "Order ID":        order_id,
@@ -243,6 +249,7 @@ def create_order_record(order, customer_id):
         "Order Date":      order_date,
         "Sales Channel":   "Shopify",
         "Shipping Status": determine_shipping_status_from_order(order),
+        "Payment Status":  payment_status,
     }
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
