@@ -2,6 +2,7 @@ import os
 import hmac
 import hashlib
 import base64
+import threading
 import requests
 from flask import Flask, request, jsonify
 
@@ -26,6 +27,10 @@ AIRTABLE_HEADERS = {
     "Authorization": f"Bearer {AIRTABLE_TOKEN}",
     "Content-Type": "application/json"
 }
+
+# ---------------- BACKGROUND SYNC STATE ----------------
+_sync_running = False
+_sync_lock    = threading.Lock()
 
 # ---------------- SHOPIFY → AIRTABLE PAYMENT STATUS MAP ----------------
 PAYMENT_STATUS_MAP = {
@@ -431,70 +436,95 @@ def fetch_all_shopify_orders():
     return orders
 
 
+def _do_full_sync():
+    """Run the complete Shopify → Airtable sync in a background thread."""
+    global _sync_running
+
+    try:
+        all_orders = fetch_all_shopify_orders()
+        print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
+
+        synced  = 0
+        updated = 0
+        failed  = 0
+
+        for order in all_orders:
+            order_name = order.get("name", "?")
+            try:
+                order_id = str(order["id"])
+                if order_exists(order_id):
+                    refresh_existing_order_statuses(order)
+                    updated += 1
+                    continue
+
+                customer    = order.get("customer") or {}
+                customer_id = find_customer(customer.get("phone"), customer.get("email"))
+
+                if not customer_id:
+                    customer_id = create_customer({
+                        "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
+                        "email":   customer.get("email"),
+                        "phone":   customer.get("phone"),
+                        "address": (order.get("shipping_address") or {}).get("address1")
+                    })
+
+                if not customer_id:
+                    print(f"❌ {order_name} — could not find/create customer", flush=True)
+                    failed += 1
+                    continue
+
+                order_record_id = create_order_record(order, customer_id)
+                if not order_record_id:
+                    failed += 1
+                    continue
+
+                create_order_line_items(order, customer_id, order_record_id)
+                print(f"✅ {order_name} synced", flush=True)
+                synced += 1
+
+            except Exception as e:
+                print(f"❌ {order_name} — error: {e}", flush=True)
+                failed += 1
+
+        print(
+            f"🎉 Sync complete: total={len(all_orders)} synced={synced} "
+            f"updated={updated} failed={failed}",
+            flush=True
+        )
+
+    except Exception as e:
+        print(f"❌ Background sync crashed: {e}", flush=True)
+
+    finally:
+        with _sync_lock:
+            _sync_running = False
+
+
 @app.route("/sync", methods=["GET"])
 def sync_all_orders():
+    global _sync_running
+
     if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
         return jsonify({
             "status":  "error",
             "message": "SHOPIFY_STORE or SHOPIFY_TOKEN env variable not set in Render"
         }), 500
 
-    print("🔄 Manual sync triggered...", flush=True)
+    with _sync_lock:
+        if _sync_running:
+            return jsonify({
+                "status":  "already_running",
+                "message": "A sync is already running. Watch Render logs for progress."
+            }), 409
+        _sync_running = True
 
-    all_orders = fetch_all_shopify_orders()
-    print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
+    print("🔄 Manual sync triggered — running in background...", flush=True)
+    threading.Thread(target=_do_full_sync, daemon=True).start()
 
-    synced  = 0
-    updated = 0
-    failed  = 0
-
-    for order in all_orders:
-        order_name = order.get("name", "?")
-        try:
-            order_id = str(order["id"])
-            if order_exists(order_id):
-                refresh_existing_order_statuses(order)
-                updated += 1
-                continue
-
-            customer    = order.get("customer") or {}
-            customer_id = find_customer(customer.get("phone"), customer.get("email"))
-
-            if not customer_id:
-                customer_id = create_customer({
-                    "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
-                    "email":   customer.get("email"),
-                    "phone":   customer.get("phone"),
-                    "address": (order.get("shipping_address") or {}).get("address1")
-                })
-
-            if not customer_id:
-                print(f"❌ {order_name} — could not find/create customer", flush=True)
-                failed += 1
-                continue
-
-            order_record_id = create_order_record(order, customer_id)
-            if not order_record_id:
-                failed += 1
-                continue
-
-            create_order_line_items(order, customer_id, order_record_id)
-            print(f"✅ {order_name} synced", flush=True)
-            synced += 1
-
-        except Exception as e:
-            print(f"❌ {order_name} — error: {e}", flush=True)
-            failed += 1
-
-    result = {
-        "status":       "done",
-        "total_orders": len(all_orders),
-        "synced":       synced,
-        "updated":      updated,
-        "failed":       failed
-    }
-    print(f"🎉 Sync complete: {result}", flush=True)
-    return jsonify(result)
+    return jsonify({
+        "status":  "started",
+        "message": "Sync started in background. Watch Render logs for progress. Look for '🎉 Sync complete' when done."
+    }), 202
 
 
 # ---------------- HEALTH CHECK ----------------
