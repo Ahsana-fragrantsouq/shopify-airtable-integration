@@ -290,8 +290,9 @@ def shopify_fulfillments():
     if not order_id:
         return jsonify({"status": "no order id"}), 200
 
-    update_shipping_status(str(order_id), "Shipped")
-    return jsonify({"status": "shipped"})
+    new_status = determine_shipping_status_from_fulfillment(payload)
+    update_shipping_status(str(order_id), new_status)
+    return jsonify({"status": new_status.lower()})
 
 
 # ---------------- WEBHOOK : CANCELLATIONS ----------------
@@ -314,26 +315,6 @@ def shopify_cancellations():
     print(f"🚫 Order {order_name} marked as Cancelled", flush=True)
     return jsonify({"status": "cancelled"})
 
-
-# ---------------- WEBHOOK : CANCELLATIONS ----------------
-@app.route("/shopify/webhook/cancellations", methods=["POST"])
-def shopify_cancellations():
-    data        = request.get_data()
-    hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
-
-    if not verify_webhook(data, hmac_header):
-        return "Unauthorized", 401
-
-    payload    = request.json
-    order_id   = str(payload.get("id", ""))
-    order_name = payload.get("name", "?")
-
-    if not order_id:
-        return jsonify({"status": "no order id"}), 200
-
-    update_shipping_status(order_id, "Cancelled")
-    print(f"🚫 Order {order_name} marked as Cancelled", flush=True)
-    return jsonify({"status": "cancelled"})
 
 
 # ---------------- SYNC ALL SHOPIFY ORDERS ----------------
