@@ -2,6 +2,7 @@ import os
 import hmac
 import hashlib
 import base64
+import threading
 import requests
 from flask import Flask, request, jsonify
 
@@ -27,6 +28,10 @@ AIRTABLE_HEADERS = {
     "Content-Type": "application/json"
 }
 
+# ---------------- BACKGROUND SYNC STATE ----------------
+_sync_running = False
+_sync_lock    = threading.Lock()
+
 # ---------------- SHOPIFY → AIRTABLE PAYMENT STATUS MAP ----------------
 PAYMENT_STATUS_MAP = {
     "paid":               "Paid",
@@ -37,6 +42,62 @@ PAYMENT_STATUS_MAP = {
     "partially_refunded": "Refunded",
     "authorized":         "Pending",
 }
+
+# ---------------- SHOPIFY → AIRTABLE SHIPPING STATUS LOGIC ----------------
+SHIPPED_STATUSES = {
+    "label_printed",
+    "label_purchased",
+    "attempted_delivery",
+    "ready_for_pickup",
+    "confirmed",
+    "in_transit",
+    "out_for_delivery",
+}
+
+def determine_shipping_status_from_order(order):
+    # Check if order is cancelled
+    if order.get("cancelled_at"):
+        return "Cancelled"
+
+    fulfillments = order.get("fulfillments") or []
+    fulfillment_status = (order.get("fulfillment_status") or "").lower()
+
+    has_delivered = False
+    has_shipped   = False
+    has_fulfilled = False
+
+    for f in fulfillments:
+        shipment_status = (f.get("shipment_status") or "").lower()
+        f_status        = (f.get("status") or "").lower()
+
+        if shipment_status == "delivered":
+            has_delivered = True
+        elif shipment_status in SHIPPED_STATUSES:
+            has_shipped = True
+        elif f_status == "success":
+            has_fulfilled = True
+
+    if has_delivered:
+        return "Delivered"
+    if has_shipped:
+        return "Shipped"
+    if has_fulfilled or fulfillment_status in ("fulfilled", "partial"):
+        return "Fulfilled"
+    return "New"
+
+
+def determine_shipping_status_from_fulfillment(fulfillment):
+    shipment_status = (fulfillment.get("shipment_status") or "").lower()
+    f_status        = (fulfillment.get("status") or "").lower()
+
+    if shipment_status == "delivered":
+        return "Delivered"
+    if shipment_status in SHIPPED_STATUSES:
+        return "Shipped"
+    if f_status == "success":
+        return "Fulfilled"
+    return "Fulfilled"
+
 
 # ---------------- SECURITY ----------------
 def verify_webhook(data, hmac_header):
@@ -72,7 +133,7 @@ def find_customer(phone, email):
 def create_customer(customer):
     payload = {
         "fields": {
-            "Name":                   customer["name"],
+            "Customer Name":          customer["name"],
             "Mail id":                customer.get("email"),
             "Contact Number":         customer.get("phone"),
             "Address":                customer.get("address"),
@@ -115,18 +176,72 @@ def order_exists(order_id):
     return None
 
 
+# ---------------- UPDATE EXISTING ORDER STATUSES ----------------
+def refresh_existing_order_statuses(order):
+    order_id     = str(order["id"])
+    order_number = order.get("name", "?")
+
+    shipping_status = determine_shipping_status_from_order(order)
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
+
+    # --- Update Orders table ---
+    orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        orders_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    for record in r.json().get("records", []):
+        requests.patch(
+            f"{orders_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
+        )
+
+    # --- Update Order Line Items table ---
+    line_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    r = requests.get(
+        line_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    line_records = r.json().get("records", [])
+    for record in line_records:
+        requests.patch(
+            f"{line_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
+        )
+
+    print(
+        f"🔄 {order_number} refreshed → Shipping: {shipping_status}, "
+        f"Payment: {payment_status} ({len(line_records)} line item(s))",
+        flush=True
+    )
+
+
 # ---------------- ORDERS TABLE ----------------
 def create_order_record(order, customer_id):
-    order_date   = order["created_at"].split("T")[0]
-    order_id     = str(order["id"])
-    order_number = order.get("name", "").replace("#", "")
+    order_date      = order["created_at"].split("T")[0]
+    order_id        = str(order["id"])
+    order_number    = order.get("name", "").replace("#", "")
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
     fields = {
         "Order ID":        order_id,
         "Customer":        [customer_id],
         "Order Date":      order_date,
         "Sales Channel":   "Shopify",
-        "Shipping Status": "New",
+        "Shipping Status": determine_shipping_status_from_order(order),
+        "Payment Status":  payment_status,
     }
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
@@ -187,6 +302,7 @@ def create_order_line_items(order, customer_id, order_record_id):
     order_number   = order.get("name", "").replace("#", "")
     shopify_status = order.get("financial_status", "pending").lower()
     payment_status = PAYMENT_STATUS_MAP.get(shopify_status, "Pending")
+    shipping_status = determine_shipping_status_from_order(order)
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
 
@@ -208,9 +324,9 @@ def create_order_line_items(order, customer_id, order_record_id):
             "Order Date":      order_date,
             "Rate":            price,
             "Qty":             qty,
-            "Tax Type":        tax_pct,
+            "Tax Type":        "5%",
             "Payment Status":  payment_status,
-            "Shipping Status": "New",
+            "Shipping Status": shipping_status,
             "Sales Channel":   "Shopify",
         }
 
@@ -304,8 +420,8 @@ def shopify_cancellations():
     if not verify_webhook(data, hmac_header):
         return "Unauthorized", 401
 
-    payload  = request.json
-    order_id = str(payload.get("id", ""))
+    payload    = request.json
+    order_id   = str(payload.get("id", ""))
     order_name = payload.get("name", "?")
 
     if not order_id:
@@ -314,7 +430,6 @@ def shopify_cancellations():
     update_shipping_status(order_id, "Cancelled")
     print(f"🚫 Order {order_name} marked as Cancelled", flush=True)
     return jsonify({"status": "cancelled"})
-
 
 
 # ---------------- SYNC ALL SHOPIFY ORDERS ----------------
@@ -341,70 +456,94 @@ def fetch_all_shopify_orders():
     return orders
 
 
+def _do_full_sync():
+    global _sync_running
+
+    try:
+        all_orders = fetch_all_shopify_orders()
+        print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
+
+        synced  = 0
+        updated = 0
+        failed  = 0
+
+        for order in all_orders:
+            order_name = order.get("name", "?")
+            try:
+                order_id = str(order["id"])
+                if order_exists(order_id):
+                    refresh_existing_order_statuses(order)
+                    updated += 1
+                    continue
+
+                customer    = order.get("customer") or {}
+                customer_id = find_customer(customer.get("phone"), customer.get("email"))
+
+                if not customer_id:
+                    customer_id = create_customer({
+                        "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
+                        "email":   customer.get("email"),
+                        "phone":   customer.get("phone"),
+                        "address": (order.get("shipping_address") or {}).get("address1")
+                    })
+
+                if not customer_id:
+                    print(f"❌ {order_name} — could not find/create customer", flush=True)
+                    failed += 1
+                    continue
+
+                order_record_id = create_order_record(order, customer_id)
+                if not order_record_id:
+                    failed += 1
+                    continue
+
+                create_order_line_items(order, customer_id, order_record_id)
+                print(f"✅ {order_name} synced", flush=True)
+                synced += 1
+
+            except Exception as e:
+                print(f"❌ {order_name} — error: {e}", flush=True)
+                failed += 1
+
+        print(
+            f"🎉 Sync complete: total={len(all_orders)} synced={synced} "
+            f"updated={updated} failed={failed}",
+            flush=True
+        )
+
+    except Exception as e:
+        print(f"❌ Background sync crashed: {e}", flush=True)
+
+    finally:
+        with _sync_lock:
+            _sync_running = False
+
+
 @app.route("/sync", methods=["GET"])
 def sync_all_orders():
+    global _sync_running
+
     if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
         return jsonify({
             "status":  "error",
             "message": "SHOPIFY_STORE or SHOPIFY_TOKEN env variable not set in Render"
         }), 500
 
-    print("🔄 Manual sync triggered...", flush=True)
+    with _sync_lock:
+        if _sync_running:
+            return jsonify({
+                "status":  "already_running",
+                "message": "A sync is already running. Watch Render logs for progress."
+            }), 409
+        _sync_running = True
 
-    all_orders = fetch_all_shopify_orders()
-    print(f"✅ Total orders from Shopify: {len(all_orders)}", flush=True)
+    print("🔄 Manual sync triggered — running in background...", flush=True)
+    threading.Thread(target=_do_full_sync, daemon=True).start()
 
-    synced  = 0
-    skipped = 0
-    failed  = 0
-
-    for order in all_orders:
-        order_name = order.get("name", "?")
-        try:
-            order_id = str(order["id"])
-            if order_exists(order_id):
-                print(f"⏭️ {order_name} already exists — skipping", flush=True)
-                skipped += 1
-                continue
-
-            customer    = order.get("customer") or {}
-            customer_id = find_customer(customer.get("phone"), customer.get("email"))
-
-            if not customer_id:
-                customer_id = create_customer({
-                    "name":    f"{customer.get('first_name', '')} {customer.get('last_name', '')}".strip(),
-                    "email":   customer.get("email"),
-                    "phone":   customer.get("phone"),
-                    "address": (order.get("shipping_address") or {}).get("address1")
-                })
-
-            if not customer_id:
-                print(f"❌ {order_name} — could not find/create customer", flush=True)
-                failed += 1
-                continue
-
-            order_record_id = create_order_record(order, customer_id)
-            if not order_record_id:
-                failed += 1
-                continue
-
-            create_order_line_items(order, customer_id, order_record_id)
-            print(f"✅ {order_name} synced", flush=True)
-            synced += 1
-
-        except Exception as e:
-            print(f"❌ {order_name} — error: {e}", flush=True)
-            failed += 1
-
-    result = {
-        "status":       "done",
-        "total_orders": len(all_orders),
-        "synced":       synced,
-        "skipped":      skipped,
-        "failed":       failed
-    }
-    print(f"🎉 Sync complete: {result}", flush=True)
-    return jsonify(result)
+    return jsonify({
+        "status":  "started",
+        "message": "Sync started in background. Watch Render logs for progress. Look for '🎉 Sync complete' when done."
+    }), 202
 
 
 # ---------------- HEALTH CHECK ----------------
