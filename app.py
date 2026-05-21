@@ -271,8 +271,8 @@ def update_shipping_status(order_id, status, fulfilled_date=None):
             f"{orders_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
             json={"fields": {
-    "Shipping Status": status,
-    **({"Ship By": fulfilled_date} if fulfilled_date else {})
+               "Shipping Status": status,
+                **({"Ship By": fulfilled_date} if fulfilled_date else {})
 }}
         )
     print(f"🚚 Orders table Shipping Status → '{status}'", flush=True)
@@ -292,8 +292,8 @@ def update_shipping_status(order_id, status, fulfilled_date=None):
             f"{line_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
             json={"fields": {
-    "Shipping Status": status,
-    **({"Ship By": fulfilled_date} if fulfilled_date else {})
+                "Shipping Status": status,
+                **({"Ship By": fulfilled_date} if fulfilled_date else {})
 }}
         )
     print(f"🚚 Order Line Items Shipping Status → '{status}' on {len(line_records)} row(s)", flush=True)
@@ -618,13 +618,6 @@ def sync_all_orders():
     }), 202
 
 
-@app.route("/backfill-ship-by", methods=["GET"])
-def backfill_ship_by():
-    if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
-        return jsonify({"status": "error", "message": "Missing env vars"}), 500
-    
-    threading.Thread(target=backfill_ship_by_dates, daemon=True).start()
-    return jsonify({"status": "started", "message": "Backfill running. Check Render logs."}), 202
 
 # ---------------- HEALTH CHECK ----------------
 @app.route("/health", methods=["GET"])
