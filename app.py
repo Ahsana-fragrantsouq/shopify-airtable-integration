@@ -526,6 +526,64 @@ def _do_full_sync():
         with _sync_lock:
             _sync_running = False
 
+            # add ship date for existing fulfilled orders
+            def backfill_ship_by_dates():
+    print("🔄 Starting Ship By backfill...", flush=True)
+    
+    shopify_orders_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
+    params = {"limit": 250, "status": "any"}
+    url = shopify_orders_url
+    updated = 0
+
+    while url:
+        r = requests.get(
+            url,
+            headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN},
+            params=params
+        )
+        orders = r.json().get("orders", [])
+
+        for order in orders:
+            fulfillments = order.get("fulfillments", [])
+            if not fulfillments:
+                continue
+
+            # Get earliest fulfillment date
+            fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
+            if not fulfilled_date:
+                continue
+
+            order_id = str(order["id"])
+
+            # Update Orders table
+            orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+            r2 = requests.get(
+                orders_url,
+                headers=AIRTABLE_HEADERS,
+                params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+            )
+            for record in r2.json().get("records", []):
+                requests.patch(
+                    f"{orders_url}/{record['id']}",
+                    headers=AIRTABLE_HEADERS,
+                    json={"fields": {"Ship By": fulfilled_date}}
+                )
+                print(f"✅ Updated Ship By for order {order_id}: {fulfilled_date}", flush=True)
+                updated += 1
+
+        # Pagination
+        link = r.headers.get("Link", "")
+        url = None
+        params = {}
+        if 'rel="next"' in link:
+            for part in link.split(","):
+                if 'rel="next"' in part:
+                    url = part.split(";")[0].strip().strip("<>")
+                    break
+
+    print(f"🎉 Backfill complete: {updated} orders updated", flush=True)
+
+
 
 @app.route("/sync", methods=["GET"])
 def sync_all_orders():
@@ -553,6 +611,14 @@ def sync_all_orders():
         "message": "Sync started in background. Watch Render logs for progress. Look for '🎉 Sync complete' when done."
     }), 202
 
+
+@app.route("/backfill-ship-by", methods=["GET"])
+def backfill_ship_by():
+    if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+        return jsonify({"status": "error", "message": "Missing env vars"}), 500
+    
+    threading.Thread(target=backfill_ship_by_dates, daemon=True).start()
+    return jsonify({"status": "started", "message": "Backfill running. Check Render logs."}), 202
 
 # ---------------- HEALTH CHECK ----------------
 @app.route("/health", methods=["GET"])
