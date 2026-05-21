@@ -718,6 +718,66 @@ def sync_all_orders():
     }), 202
 
 
+@app.route("/fix-blank-payments", methods=["GET"])
+def fix_blank_payments():
+    threading.Thread(target=_fix_blank_payments, daemon=True).start()
+    return jsonify({"status": "started", "message": "Fixing blank payment statuses..."}), 202
+
+def _fix_blank_payments():
+    print("🔧 Starting blank payment fix...", flush=True)
+    fixed = 0
+
+    # Find all Shopify orders with blank Payment Status in Airtable
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    formula = "AND({Sales Channel}='Shopify', {Payment Status}='')"
+    r = requests.get(url, headers=AIRTABLE_HEADERS, params={"filterByFormula": formula})
+    records = r.json().get("records", [])
+    print(f"🔍 Found {len(records)} records with blank Payment Status", flush=True)
+
+    for record in records:
+        order_id = record["fields"].get("Order ID", "")
+        if not order_id:
+            continue
+
+        # Fetch fresh data from Shopify
+        shopify_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders/{order_id}.json"
+        sr = requests.get(
+            shopify_url,
+            headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}
+        )
+        order = sr.json().get("order")
+        if not order:
+            print(f"⚠️ Order {order_id} not found in Shopify", flush=True)
+            continue
+
+        # Get values
+        shopify_payment = (order.get("financial_status") or "pending").lower()
+        payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
+        shipping_status = determine_shipping_status_from_order(order)
+
+        fulfillments = order.get("fulfillments", [])
+        ship_by = fulfillments[0].get("created_at", "").split("T")[0] if fulfillments else None
+
+        fields = {
+            "Payment Status":  payment_status,
+            "Shipping Status": shipping_status,
+        }
+        if ship_by:
+            fields["Ship By"] = ship_by
+
+        # Update Airtable
+        patch = requests.patch(
+            f"{url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": fields}
+        )
+        if patch.status_code in (200, 201):
+            print(f"✅ Fixed order {order_id} → Payment: {payment_status}, Shipping: {shipping_status}", flush=True)
+            fixed += 1
+        else:
+            print(f"❌ Failed order {order_id}: {patch.text[:100]}", flush=True)
+
+    print(f"🎉 Fix complete: {fixed} orders updated", flush=True)
 
 # ---------------- HEALTH CHECK ----------------
 @app.route("/health", methods=["GET"])
