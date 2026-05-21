@@ -185,6 +185,9 @@ def refresh_existing_order_statuses(order):
     shopify_payment = (order.get("financial_status") or "pending").lower()
     payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
+    fulfillments = order.get("fulfillments", [])
+    ship_by = fulfillments[0].get("created_at", "").split("T")[0] if fulfillments else None
+
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
@@ -193,13 +196,16 @@ def refresh_existing_order_statuses(order):
         params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
     )
     for record in r.json().get("records", []):
+        fields = {
+            "Shipping Status": shipping_status,
+            "Payment Status":  payment_status,
+        }
+        if ship_by:
+            fields["Ship By"] = ship_by
         requests.patch(
             f"{orders_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {
-                "Shipping Status": shipping_status,
-                "Payment Status":  payment_status,
-            }}
+            json={"fields": fields}
         )
 
     # --- Update Order Line Items table ---
@@ -225,7 +231,6 @@ def refresh_existing_order_statuses(order):
         f"Payment: {payment_status} ({len(line_records)} line item(s))",
         flush=True
     )
-
 
 # ---------------- ORDERS TABLE ----------------
 def create_order_record(order, customer_id):
