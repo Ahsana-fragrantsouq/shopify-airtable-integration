@@ -558,7 +558,10 @@ def backfill_ship_by_dates():
                 fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
             # Fallback: use updated_at if order is fulfilled but no fulfillments array
             elif fulfillment_status in ("fulfilled", "partial"):
-                fulfilled_date = (order.get("updated_at") or "").split("T")[0]
+                fulfilled_date = (
+                order.get("closed_at") or
+                order.get("updated_at") or ""
+                ).split("T")[0]
             else:
                 continue
 
