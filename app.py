@@ -527,7 +527,8 @@ def _do_full_sync():
             _sync_running = False
 
             # add ship date for existing fulfilled orders
-            def backfill_ship_by_dates():
+
+def backfill_ship_by_dates():
     print("🔄 Starting Ship By backfill...", flush=True)
     
     shopify_orders_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
@@ -548,14 +549,12 @@ def _do_full_sync():
             if not fulfillments:
                 continue
 
-            # Get earliest fulfillment date
             fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
             if not fulfilled_date:
                 continue
 
             order_id = str(order["id"])
 
-            # Update Orders table
             orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
             r2 = requests.get(
                 orders_url,
@@ -571,7 +570,6 @@ def _do_full_sync():
                 print(f"✅ Updated Ship By for order {order_id}: {fulfilled_date}", flush=True)
                 updated += 1
 
-        # Pagination
         link = r.headers.get("Link", "")
         url = None
         params = {}
@@ -583,6 +581,14 @@ def _do_full_sync():
 
     print(f"🎉 Backfill complete: {updated} orders updated", flush=True)
 
+
+@app.route("/backfill-ship-by", methods=["GET"])
+def backfill_ship_by():
+    if not SHOPIFY_STORE or not SHOPIFY_TOKEN:
+        return jsonify({"status": "error", "message": "Missing env vars"}), 500
+    
+    threading.Thread(target=backfill_ship_by_dates, daemon=True).start()
+    return jsonify({"status": "started", "message": "Backfill running. Check Render logs."}), 202
 
 
 @app.route("/sync", methods=["GET"])
