@@ -574,7 +574,7 @@ def backfill_ship_by_dates():
             if not fulfilled_date:
                 continue
 
-            order_id = str(order["id"])
+           order_id = str(order["id"])
 
             orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
             r2 = requests.get(
@@ -582,14 +582,21 @@ def backfill_ship_by_dates():
                 headers=AIRTABLE_HEADERS,
                 params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
             )
-            for record in r2.json().get("records", []):
-                requests.patch(
+            records = r2.json().get("records", [])
+            print(f"🔍 Order {order_id} → fulfilled_date={fulfilled_date} → found {len(records)} records in Airtable", flush=True)
+
+            for record in records:
+                patch_resp = requests.patch(
                     f"{orders_url}/{record['id']}",
                     headers=AIRTABLE_HEADERS,
                     json={"fields": {"Ship By": fulfilled_date}}
                 )
-                print(f"✅ Updated Ship By for order {order_id}: {fulfilled_date}", flush=True)
-                updated += 1
+                print(f"📝 Patch status: {patch_resp.status_code} — {patch_resp.text[:100]}", flush=True)
+                if patch_resp.status_code in (200, 201):
+                    print(f"✅ Updated Ship By for order {order_id}: {fulfilled_date}", flush=True)
+                    updated += 1
+                else:
+                    print(f"❌ Failed to update order {order_id}: {patch_resp.text}", flush=True)
 
         link = r.headers.get("Link", "")
         url = None
