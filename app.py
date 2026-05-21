@@ -556,12 +556,18 @@ def backfill_ship_by_dates():
             # Get date from fulfillments array first
             if fulfillments:
                 fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
-            # Fallback: use updated_at if order is fulfilled but no fulfillments array
             elif fulfillment_status in ("fulfilled", "partial"):
-                fulfilled_date = (
-                order.get("closed_at") or
-                order.get("updated_at") or ""
-                ).split("T")[0]
+                # Fetch from dedicated fulfillments endpoint
+                fulfill_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders/{order['id']}/fulfillments.json"
+                fr = requests.get(
+                    fulfill_url,
+                    headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}
+                )
+                fetched = fr.json().get("fulfillments", [])
+                if fetched:
+                    fulfilled_date = fetched[0].get("created_at", "").split("T")[0]
+                else:
+                    fulfilled_date = (order.get("closed_at") or order.get("updated_at") or "").split("T")[0]
             else:
                 continue
 
