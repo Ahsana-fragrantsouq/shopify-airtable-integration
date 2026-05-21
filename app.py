@@ -646,7 +646,7 @@ def backfill_ship_by_dates():
             if not fulfilled_date:
                 continue
 
-           order_id = str(order["id"])
+            order_id = str(order["id"])
 
             orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
             r2 = requests.get(
