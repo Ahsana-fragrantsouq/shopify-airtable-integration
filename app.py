@@ -545,11 +545,18 @@ def backfill_ship_by_dates():
         orders = r.json().get("orders", [])
 
         for order in orders:
+            fulfillment_status = (order.get("fulfillment_status") or "").lower()
             fulfillments = order.get("fulfillments", [])
-            if not fulfillments:
+
+            # Get date from fulfillments array first
+            if fulfillments:
+                fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
+            # Fallback: use updated_at if order is fulfilled but no fulfillments array
+            elif fulfillment_status in ("fulfilled", "partial"):
+                fulfilled_date = (order.get("updated_at") or "").split("T")[0]
+            else:
                 continue
 
-            fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
             if not fulfilled_date:
                 continue
 
