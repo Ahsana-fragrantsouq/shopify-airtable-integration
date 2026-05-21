@@ -535,6 +535,78 @@ def _do_full_sync():
 
 def backfill_ship_by_dates():
     print("🔄 Starting Ship By backfill...", flush=True)
+
+    shopify_orders_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
+    params = {"limit": 250, "status": "any"}
+    url = shopify_orders_url
+    updated = 0
+
+    while url:
+        r = requests.get(
+            url,
+            headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN},
+            params=params
+        )
+        orders = r.json().get("orders", [])
+
+        for order in orders:
+            fulfillment_status = (order.get("fulfillment_status") or "").lower()
+            fulfillments = order.get("fulfillments", [])
+
+            if fulfillments:
+                fulfilled_date = fulfillments[0].get("created_at", "").split("T")[0]
+            elif fulfillment_status in ("fulfilled", "partial"):
+                fulfill_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders/{order['id']}/fulfillments.json"
+                fr = requests.get(
+                    fulfill_url,
+                    headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}
+                )
+                fetched = fr.json().get("fulfillments", [])
+                if fetched:
+                    fulfilled_date = fetched[0].get("created_at", "").split("T")[0]
+                else:
+                    fulfilled_date = (order.get("closed_at") or order.get("updated_at") or "").split("T")[0]
+            else:
+                continue
+
+            if not fulfilled_date:
+                continue
+
+            order_id = str(order["id"])
+
+            orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+            r2 = requests.get(
+                orders_url,
+                headers=AIRTABLE_HEADERS,
+                params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+            )
+            records = r2.json().get("records", [])
+            print(f"🔍 Order {order_id} → fulfilled_date={fulfilled_date} → found {len(records)} records in Airtable", flush=True)
+
+            for record in records:
+                patch_resp = requests.patch(
+                    f"{orders_url}/{record['id']}",
+                    headers=AIRTABLE_HEADERS,
+                    json={"fields": {"Ship By": fulfilled_date}}
+                )
+                print(f"📝 Patch status: {patch_resp.status_code} — {patch_resp.text[:100]}", flush=True)
+                if patch_resp.status_code in (200, 201):
+                    print(f"✅ Updated Ship By for order {order_id}: {fulfilled_date}", flush=True)
+                    updated += 1
+                else:
+                    print(f"❌ Failed to update order {order_id}: {patch_resp.text}", flush=True)
+
+        link = r.headers.get("Link", "")
+        url = None
+        params = {}
+        if 'rel="next"' in link:
+            for part in link.split(","):
+                if 'rel="next"' in part:
+                    url = part.split(";")[0].strip().strip("<>")
+                    break
+
+    print(f"🎉 Backfill complete: {updated} orders updated", flush=True)
+    print("🔄 Starting Ship By backfill...", flush=True)
     
     shopify_orders_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
     params = {"limit": 250, "status": "any"}
