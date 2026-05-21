@@ -257,7 +257,7 @@ def create_order_record(order, customer_id):
 
 
 # ---------------- SHIPPING STATUS UPDATE ----------------
-def update_shipping_status(order_id, status):
+def update_shipping_status(order_id, status, fulfilled_date=None):
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
@@ -270,7 +270,10 @@ def update_shipping_status(order_id, status):
         requests.patch(
             f"{orders_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {"Shipping Status": status}}
+            json={"fields": {
+    "Shipping Status": status,
+    **({"Ship By": fulfilled_date} if fulfilled_date else {})
+}}
         )
     print(f"🚚 Orders table Shipping Status → '{status}'", flush=True)
 
@@ -288,7 +291,10 @@ def update_shipping_status(order_id, status):
         requests.patch(
             f"{line_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {"Shipping Status": status}}
+            json={"fields": {
+    "Shipping Status": status,
+    **({"Ship By": fulfilled_date} if fulfilled_date else {})
+}}
         )
     print(f"🚚 Order Line Items Shipping Status → '{status}' on {len(line_records)} row(s)", flush=True)
 
@@ -407,7 +413,9 @@ def shopify_fulfillments():
         return jsonify({"status": "no order id"}), 200
 
     new_status = determine_shipping_status_from_fulfillment(payload)
-    update_shipping_status(str(order_id), new_status)
+    fulfilled_date = (payload.get("created_at") or "").split("T")[0] or None
+    update_shipping_status(str(order_id), new_status, fulfilled_date)
+
     return jsonify({"status": new_status.lower()})
 
 
