@@ -739,13 +739,16 @@ def _fix_blank_payments():
         if not order_id:
             continue
 
-        # Fetch fresh data from Shopify
-        shopify_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders/{order_id}.json"
+       
+        # Fetch fresh data from Shopify (use list endpoint for archived orders)
+        shopify_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/orders.json"
         sr = requests.get(
             shopify_url,
-            headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN}
+            headers={"X-Shopify-Access-Token": SHOPIFY_TOKEN},
+            params={"ids": order_id, "status": "any"}
         )
-        order = sr.json().get("order")
+        orders_list = sr.json().get("orders", [])
+        order = orders_list[0] if orders_list else None
         if not order:
             print(f"⚠️ Order {order_id} not found in Shopify", flush=True)
             continue
