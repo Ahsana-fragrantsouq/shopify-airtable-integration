@@ -17,6 +17,12 @@ SHOPIFY_WEBHOOK_SECRET = os.getenv("SHOPIFY_WEBHOOK_SECRET")
 SHOPIFY_STORE          = os.getenv("SHOPIFY_STORE")   # e.g. fragrantsouq
 SHOPIFY_TOKEN          = os.getenv("SHOPIFY_TOKEN")   # Admin API access token
 
+# for API access token
+CLIENT_ID     = os.getenv("SHOPIFY_CLIENT_ID")
+CLIENT_SECRET = os.getenv("SHOPIFY_CLIENT_SECRET")
+REDIRECT_URI  = os.getenv("SHOPIFY_REDIRECT_URI")  # e.g. https://your-render-url.com/auth/callback
+
+
 # Airtable TABLE IDs
 CUSTOMERS_TABLE        = "tbldpymKhQIwK5qGP"   # Customers
 ORDERS_TABLE           = "tbl480LKVFx8CiyoB"   # Orders
@@ -782,6 +788,42 @@ def _fix_blank_payments():
 
     print(f"🎉 Fix complete: {fixed} orders updated", flush=True)
 
+
+#  API access token
+@app.route("/auth", methods=["GET"])
+def auth():
+    scopes = "read_orders,write_orders,read_all_orders,read_fulfillments,write_fulfillments,read_customers,write_customers"
+    auth_url = (
+        f"https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/authorize"
+        f"?client_id={CLIENT_ID}"
+        f"&scope={scopes}"
+        f"&redirect_uri={REDIRECT_URI}"
+    )
+    from flask import redirect
+    return redirect(auth_url)
+
+
+@app.route("/auth/callback", methods=["GET"])
+def auth_callback():
+    code = request.args.get("code")
+    if not code:
+        return "No code received", 400
+
+    token_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token"
+    response = requests.post(token_url, json={
+        "client_id":     CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "code":          code
+    })
+
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+    print(f"🔑 NEW ACCESS TOKEN: {access_token}", flush=True)
+
+    return jsonify({
+        "access_token": access_token,
+        "message": "Copy this token and update SHOPIFY_TOKEN in Render!"
+    })
 # ---------------- HEALTH CHECK ----------------
 @app.route("/health", methods=["GET"])
 def health():
