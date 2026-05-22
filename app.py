@@ -239,6 +239,10 @@ def create_order_record(order, customer_id):
     shopify_payment = (order.get("financial_status") or "pending").lower()
     payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
+    # Get Ship By from fulfillments
+    fulfillments = order.get("fulfillments", [])
+    ship_by = fulfillments[0].get("created_at", "").split("T")[0] if fulfillments else None
+
     fields = {
         "Order ID":        order_id,
         "Customer":        [customer_id],
@@ -247,6 +251,9 @@ def create_order_record(order, customer_id):
         "Shipping Status": determine_shipping_status_from_order(order),
         "Payment Status":  payment_status,
     }
+
+    if ship_by:
+        fields["Ship By"] = ship_by
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json={"fields": fields})
