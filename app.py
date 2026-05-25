@@ -38,7 +38,7 @@ PAYMENT_STATUS_MAP = {
     "pending":            "Pending",
     "partially_paid":     "Pending",
     "refunded":           "Refunded",
-    "voided":             "Voided",
+   "voided":             "Cancelled",
     "partially_refunded": "Refunded",
     "authorized":         "Pending",
 }
