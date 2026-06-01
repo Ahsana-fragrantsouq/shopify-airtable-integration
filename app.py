@@ -518,6 +518,66 @@ def _do_full_sync():
         with _sync_lock:
             _sync_running = False
 
+            # order updation
+# ---------------- WEBHOOK : ORDER UPDATED ----------------
+@app.route("/shopify/webhook/order-updated", methods=["POST"])
+def shopify_order_updated():
+    data        = request.get_data()
+    hmac_header = request.headers.get("X-Shopify-Hmac-Sha256")
+
+    if not verify_webhook(data, hmac_header):
+        return "Unauthorized", 401
+
+    order    = request.json
+    order_id = str(order.get("id", ""))
+
+    if not order_id:
+        return jsonify({"status": "no order id"}), 200
+
+    # Update payment status
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
+
+    # Update shipping status
+    shipping_status = determine_shipping_status_from_order(order)
+
+    # --- Update Orders table ---
+    orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        orders_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    for record in r.json().get("records", []):
+        requests.patch(
+            f"{orders_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
+        )
+
+    # --- Update Order Line Items table ---
+    line_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    r = requests.get(
+        line_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    for record in r.json().get("records", []):
+        requests.patch(
+            f"{line_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": {
+                "Shipping Status": shipping_status,
+                "Payment Status":  payment_status,
+            }}
+        )
+
+    print(f"🔄 Order {order.get('name','?')} updated → Payment: {payment_status}, Shipping: {shipping_status}", flush=True)
+    return jsonify({"status": "ok", "payment": payment_status, "shipping": shipping_status})
+
 
 @app.route("/sync", methods=["GET"])
 def sync_all_orders():
