@@ -185,6 +185,67 @@ def refresh_existing_order_statuses(order):
     shopify_payment = (order.get("financial_status") or "pending").lower()
     payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
+    # ── Extract Ship By from fulfillment date ──
+    ship_by = None
+    fulfillments = order.get("fulfillments") or []
+    if fulfillments:
+        fulfilled_at = fulfillments[0].get("created_at", "")
+        if fulfilled_at:
+            ship_by = fulfilled_at[:10]
+
+    # --- Update Orders table ---
+    orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
+    r = requests.get(
+        orders_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    for record in r.json().get("records", []):
+        fields = {
+            "Shipping Status": shipping_status,
+            "Payment Status":  payment_status,
+        }
+        if ship_by:
+            fields["Ship By"] = ship_by
+        requests.patch(
+            f"{orders_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": fields}
+        )
+
+    # --- Update Order Line Items table ---
+    line_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDER_LINE_ITEMS_TABLE}"
+    r = requests.get(
+        line_url,
+        headers=AIRTABLE_HEADERS,
+        params={"filterByFormula": f"{{Order ID}}='{order_id}'"}
+    )
+    line_records = r.json().get("records", [])
+    for record in line_records:
+        fields = {
+            "Shipping Status": shipping_status,
+            "Payment Status":  payment_status,
+        }
+        if ship_by:
+            fields["Ship By"] = ship_by
+        requests.patch(
+            f"{line_url}/{record['id']}",
+            headers=AIRTABLE_HEADERS,
+            json={"fields": fields}
+        )
+
+    print(
+        f"🔄 {order_number} refreshed → Shipping: {shipping_status}, "
+        f"Payment: {payment_status}, Ship By: {ship_by or 'N/A'} ({len(line_records)} line item(s))",
+        flush=True
+    )
+    order_id     = str(order["id"])
+    order_number = order.get("name", "?")
+
+    shipping_status = determine_shipping_status_from_order(order)
+    shopify_payment = (order.get("financial_status") or "pending").lower()
+    payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
+
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
