@@ -235,6 +235,13 @@ def create_order_record(order, customer_id):
     shopify_payment = (order.get("financial_status") or "pending").lower()
     payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
+# add ship by
+    ship_by = None
+    if order.get("fulfillments"):
+        fulfilled_at = order["fulfillments"][0].get("created_at", "")
+        if fulfilled_at:
+            ship_by = fulfilled_at[:10]
+
     fields = {
         "Order ID":        order_id,
         "Customer":        [customer_id],
@@ -243,6 +250,8 @@ def create_order_record(order, customer_id):
         "Shipping Status": determine_shipping_status_from_order(order),
         "Payment Status":  payment_status,
     }
+    if ship_by:
+        fields["Ship By"] = ship_by
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.post(url, headers=AIRTABLE_HEADERS, json={"fields": fields})
@@ -257,7 +266,7 @@ def create_order_record(order, customer_id):
 
 
 # ---------------- SHIPPING STATUS UPDATE ----------------
-def update_shipping_status(order_id, status):
+def update_shipping_status(order_id, status, ship_by=None):
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
@@ -267,10 +276,13 @@ def update_shipping_status(order_id, status):
     )
     order_records = r.json().get("records", [])
     for record in order_records:
+        fields = {"Shipping Status": status}
+        if ship_by:
+            fields["Ship By"] = ship_by
         requests.patch(
             f"{orders_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {"Shipping Status": status}}
+            json={"fields": fields}
         )
     print(f"🚚 Orders table Shipping Status → '{status}'", flush=True)
 
@@ -285,13 +297,15 @@ def update_shipping_status(order_id, status):
     if not line_records:
         print(f"⚠️ No line items found for Order ID {order_id}", flush=True)
     for record in line_records:
+        fields = {"Shipping Status": status}
+        if ship_by:
+            fields["Ship By"] = ship_by
         requests.patch(
             f"{line_url}/{record['id']}",
             headers=AIRTABLE_HEADERS,
-            json={"fields": {"Shipping Status": status}}
+            json={"fields": fields}
         )
     print(f"🚚 Order Line Items Shipping Status → '{status}' on {len(line_records)} row(s)", flush=True)
-
 
 # ---------------- ORDER LINE ITEM CREATION ----------------
 def create_order_line_items(order, customer_id, order_record_id):
@@ -406,8 +420,9 @@ def shopify_fulfillments():
     if not order_id:
         return jsonify({"status": "no order id"}), 200
 
-    new_status = determine_shipping_status_from_fulfillment(payload)
-    update_shipping_status(str(order_id), new_status)
+    new_status   = determine_shipping_status_from_fulfillment(payload)
+    fulfilled_at = (payload.get("created_at") or "")[:10]
+    update_shipping_status(str(order_id), new_status, fulfilled_at)
     return jsonify({"status": new_status.lower()})
 
 
