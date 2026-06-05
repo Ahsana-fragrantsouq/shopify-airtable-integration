@@ -185,14 +185,21 @@ def refresh_existing_order_statuses(order):
     shopify_payment = (order.get("financial_status") or "pending").lower()
     payment_status  = PAYMENT_STATUS_MAP.get(shopify_payment, "Pending")
 
-    # ── Extract Ship By from fulfillment date ──
+   # ── Extract Ship By from fulfillment date ──
     ship_by = None
     fulfillments = order.get("fulfillments") or []
     if fulfillments:
-        fulfilled_at = fulfillments[0].get("created_at", "")
-        if fulfilled_at:
-            ship_by = fulfilled_at[:10]
-
+        f = fulfillments[0]
+        # try multiple date fields in order of preference
+        raw = (
+            f.get("created_at") or
+            f.get("updated_at") or
+            f.get("shipped_at") or
+            order.get("updated_at") or
+            ""
+        )
+        if raw:
+            ship_by = raw[:10]
     # --- Update Orders table ---
     orders_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{ORDERS_TABLE}"
     r = requests.get(
